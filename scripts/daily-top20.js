@@ -321,11 +321,13 @@ async function main() {
         }
       }
 
+      // Publish gate — V3 qualified opps always publish (they already passed the qualification gate)
       if (evidenceQual >= 70 && riskScore <= 65) {
-        await client.query("UPDATE opportunities SET status='published',verification_status='verified',published_at=NOW() WHERE id=$1", ['o_' + hash]);
+        await client.query("UPDATE opportunities SET status='published',published_at=NOW() WHERE id=$1", ['o_' + hash]);
         published++;
       } else {
-        await client.query("UPDATE opportunities SET status='candidate',verification_status='candidate' WHERE id=$1", ['o_' + hash]);
+        // Qualified but scored too low for auto-publish — keep as candidate for review
+        await client.query("UPDATE opportunities SET status='candidate' WHERE id=$1", ['o_' + hash]);
       }
 
     } catch (e) { /* duplicate */ }
