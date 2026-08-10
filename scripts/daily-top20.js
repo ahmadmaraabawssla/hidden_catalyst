@@ -1,16 +1,20 @@
 /**
- * Daily Discovery Engine — Picks the TOP 20 opportunities and runs AI on them.
+ * Daily Discovery Engine — Budget-based continuous discovery
  * 
- * Selection criteria (pre-LLM):
- * 1. Market cap: prioritize $100M-$5B (configurable)
- * 2. Form type: 8-K > 10-Q > 10-K > S-1 > 13D
- * 3. Recency: last 7 days
- * 4. Source diversity: mix across SEC, FDA, USPTO if available
- * 5. Sector diversity: no more than 3 from same sector
+ * Scans up to MAX_SCAN companies for recent filings, runs deep research
+ * on promising ones, and stops when TARGET_CANDIDATES qualified opportunities
+ * are found — or the scan budget is exhausted.
  * 
- * Only these 20 get LLM analysis. User can trigger more via "Explore More".
+ * Rejected items are stored for audit but do NOT consume the output quota.
+ * The engine keeps searching until it finds enough genuine candidates.
  * 
- * Run: node scripts/daily-top20.js [optional: --force-run]
+ * Configuration:
+ *   TARGET_CANDIDATES = 20  (how many qualified items to find)
+ *   MAX_SCAN = 500          (max companies to screen)
+ *   MAX_DEEP_RESEARCH = 100 (max LLM calls per run)
+ *   LOOKBACK_DAYS = 7       (how recent filings must be)
+ * 
+ * Run: node scripts/daily-top20.js
  */
 
 const { Client } = require('pg');
@@ -25,7 +29,13 @@ const UA = process.env.SEC_USER_AGENT || 'Hidden Catalyst (contact@hiddencatalys
 
 if (!DB) { console.error('DATABASE_URL environment variable required'); process.exit(1); }
 if (!DEEPSEEK_KEY) { console.error('DEEPSEEK_API_KEY environment variable required'); process.exit(1); }
-const TOP_N = 20;
+
+// Budget-based discovery config
+const TARGET_CANDIDATES = 20;  // output target — stop when this many qualified
+const MAX_SCAN = 500;          // max companies to screen for filings
+const MAX_DEEP_RESEARCH = 100; // max LLM calls per run
+const LOOKBACK_DAYS = 7;
+const ENGINE_VERSION = 'v3';
 
 setApiKey(DEEPSEEK_KEY);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -68,9 +78,10 @@ function preScore(company, formType, filingDate) {
 async function main() {
   const client = new Client({ connectionString: DB });
   await client.connect();
-  console.log('═══ Daily Top 20 Discovery Engine ═══\n');
+  console.log('═══ Discovery Engine ' + ENGINE_VERSION + ' (Budget-Based) ═══');
+  console.log('  Target candidates: ' + TARGET_CANDIDATES + ' | Max scan: ' + MAX_SCAN + ' | Max deep research: ' + MAX_DEEP_RESEARCH + ' | Lookback: ' + LOOKBACK_DAYS + 'd\n');
 
-  // Find candidates
+  // Find candidates — prioritize smaller caps
   const candidates = await client.query(`
     SELECT c.id, c.cik, c.display_name, s.ticker, s.id as sec_id,
            COALESCE(NULLIF(s.market_cap, 0), 800000000) as mc, c.sector
@@ -80,22 +91,19 @@ async function main() {
       AND s.active = true
       AND s.exchange IN ('NYSE', 'NASDAQ', 'NYSE American')
       AND (s.market_cap IS NULL OR s.market_cap > 10000)
-      AND NOT EXISTS (
-        SELECT 1 FROM opportunities o WHERE o.security_id = s.id AND o.status = 'published'
-      )
     ORDER BY s.market_cap ASC NULLS FIRST
-    LIMIT 500
-  `);
+    LIMIT $1
+  `, [MAX_SCAN]);
 
-  console.log(`Scanning ${candidates.rows.length} candidate companies...\n`);
+  var funnelScreened = candidates.rows.length;
+  console.log('Screening ' + funnelScreened + ' companies for recent filings...\n');
 
-  // Fetch filing data and pre-score
-  const scored = [];
-
+  // Phase 1: Pre-screen
+  var scored = [];
   for (const co of candidates.rows) {
     const cik = String(co.cik).padStart(10, '0');
     try {
-      const res = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
+      const res = await fetch('https://data.sec.gov/submissions/CIK' + cik + '.json', {
         headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(6000)
       });
       if (!res.ok) continue;
@@ -103,43 +111,43 @@ async function main() {
       const f = data.filings?.recent;
       if (!f?.form) continue;
 
-      // Find best material filing in last 7 days
       for (let i = 0; i < Math.min(10, f.form.length); i++) {
         const fm = (f.form[i] || '').toUpperCase();
         if (!MATERIAL_FORMS.includes(fm.replace(/\/A$/, ''))) continue;
         if (SKIP_FORMS.has(fm)) continue;
-
         const dt = f.filingDate[i] || '';
         if (!dt) continue;
         const daysAgo = (Date.now() - new Date(dt).getTime()) / 86400000;
-        if (daysAgo > 7) continue;
+        if (daysAgo > LOOKBACK_DAYS) continue;
 
         scored.push({
-          ...co,
-          formType: fm.replace(/\/A$/, ''),
-          filingDate: dt,
+          ...co, formType: fm.replace(/\/A$/, ''), filingDate: dt,
           accessionNumber: f.accessionNumber[i],
           preScore: preScore(co, fm.replace(/\/A$/, ''), dt),
-          aiProcessed: false,
         });
-        break; // One filing per company
+        break;
       }
-      await sleep(50); // SEC rate limit
+      await sleep(40);
     } catch {}
   }
 
-  // Sort by pre-score, pick top N
   scored.sort((a, b) => b.preScore - a.preScore);
-  const topN = scored.slice(0, TOP_N);
+  var funnelFilingCandidates = scored.length;
 
-  console.log(`Found ${scored.length} candidates with recent filings.`);
-  console.log(`Selected TOP ${topN.length} for AI analysis:\n`);
+  console.log('Screened: ' + funnelScreened + ' → with filings: ' + funnelFilingCandidates);
+  console.log('Deep research (max ' + MAX_DEEP_RESEARCH + ' calls, stop at ' + TARGET_CANDIDATES + ' qualified)...\n');
 
-  let aiProcessed = 0, published = 0;
+  // Phase 2: Deep research — budget-based
+  var deepResearched = 0, qualified = 0, rejected = 0, watched = 0;
 
-  for (let idx = 0; idx < topN.length; idx++) {
-    const co = topN[idx];
-    console.log(`  [${idx + 1}/${topN.length}] ${co.ticker} (${co.display_name.slice(0, 30)}) — ${co.formType} — pre-score: ${co.preScore}`);
+  for (var idx = 0; idx < Math.min(scored.length, MAX_DEEP_RESEARCH); idx++) {
+    if (qualified >= TARGET_CANDIDATES) {
+      console.log('\n  ✓ Target ' + TARGET_CANDIDATES + ' reached. Stopping.');
+      break;
+    }
+
+    var co = scored[idx];
+    console.log('  [' + (idx + 1) + '/' + Math.min(scored.length, MAX_DEEP_RESEARCH) + '] ' + co.ticker + ' (' + co.display_name.slice(0, 25) + ') — ' + co.formType + ' — pre-score: ' + co.preScore);
 
     // Download filing text
     let filingText = '';
@@ -198,19 +206,16 @@ async function main() {
       }
     } catch {}
 
-    // Run DeepSeek v2 — two-pass extraction with rejection capability
-    let extraction = null;
+    var extraction = null;
     if (filingText.length > 200) {
       extraction = await extractFromFiling(filingText, co.display_name, co.ticker, co.formType, co.sector, companyContext);
-      if (extraction) aiProcessed++;
+      deepResearched++;
       await sleep(2000);
     }
 
     // ── V3 QUALIFICATION GATE ──
-    // Does this filing contain a genuine hidden opportunity?
-    // If extraction returned qualified===false, store as REJECTED or WATCH.
     if (!extraction || !extraction.qualified) {
-      const reason = extraction?.isRoutine ? 'routine_filing' : 'no_hidden_angle';
+      var reason = extraction?.isRoutine ? 'routine_filing' : 'no_hidden_angle';
       const verStatus = extraction?.isRoutine ? 'rejected' : 'watch';
       const hiddenAngle = extraction?.hiddenAngle || null;
 
@@ -222,8 +227,8 @@ async function main() {
 
       try {
         await client.query(
-          `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,created_at,updated_at)
-           VALUES($1,$2,$3,$4,'rejected',$5,$6,$7,NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
+          `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,engine_version,created_at,updated_at)
+           VALUES($1,$2,$3,$4,'rejected',$5,$6,$7,'` + ENGINE_VERSION + `',NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
           ['o_' + hash, co.sec_id, title,
            `[Rejected: ${reason}] ${co.display_name} filed ${co.formType} on ${co.filingDate}. No hidden angle identified.`,
            verStatus,
@@ -341,7 +346,7 @@ async function main() {
         ['e_' + hash, 'd_' + hash, (extraction?.verifiedFacts[0] || summary).slice(0, 500), 'primary', evidenceQual]
       );
       await client.query(
-        'INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,price_change_pct,volume_change_pct,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW()) ON CONFLICT(id) DO NOTHING',
+        `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,price_change_pct,volume_change_pct,engine_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'` + ENGINE_VERSION + `',NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
         ['o_' + hash, co.sec_id, title, summary, 'candidate',
          extraction?.verificationStatus || 'candidate',
          extraction?.hiddenAngle ? JSON.stringify(extraction.hiddenAngle) : null,
@@ -450,8 +455,14 @@ async function main() {
     }
   }
 
-  console.log(`\n═══ Daily Top 20 Complete ═══`);
-  console.log(`AI analyzed: ${aiProcessed}/${topN.length} | Published: ${published}`);
+  console.log('\n═══ Discovery Engine ' + ENGINE_VERSION + ' Complete ═══');
+  console.log('\n  📊 FUNNEL:');
+  console.log('    Screened:           ' + funnelScreened + ' companies');
+  console.log('    Recent filings:     ' + funnelFilingCandidates);
+  console.log('    Deep researched:    ' + deepResearched + ' (LLM)');
+  console.log('    Qualified:          ' + qualified + ' (Candidate+)');
+  console.log('    Rejected/routine:   ' + rejected);
+  console.log('    Watch:              ' + watched);
 
   const counts = await client.query("SELECT status, COUNT(*) as n FROM opportunities GROUP BY status");
   console.log('Statuses:', JSON.stringify(counts.rows));
