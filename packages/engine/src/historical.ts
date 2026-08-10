@@ -4,7 +4,7 @@
  * For a given event type + sector, finds comparable past events
  * and calculates median reaction metrics.
  *
- * Data sources: Finnhub price candles, database of past opportunities.
+ * Data sources: FMP price candles, database of past opportunities.
  */
 
 import { prisma } from '@hidden-catalyst/db';
@@ -64,25 +64,26 @@ export async function analyzeHistoricalReactions(params: {
   for (const opp of comparable) {
     const ticker = opp.security.ticker;
 
-    // Try to get actual price reaction data from Finnhub
+    // Try to get actual price reaction data from FMP
     let reaction1d: number | null = null;
 
     try {
-      const key = process.env.FINNHUB_API_KEY;
+      const key = process.env.FMP_API_KEY;
       if (key && opp.detectedAt) {
         const eventDate = new Date(opp.detectedAt);
-        const fromTs = Math.floor((eventDate.getTime() - 86400000) / 1000);
-        const toTs = Math.floor((eventDate.getTime() + 5 * 86400000) / 1000);
+        const fromStr = new Date(eventDate.getTime() - 86400000).toISOString().slice(0, 10);
+        const toStr = new Date(eventDate.getTime() + 5 * 86400000).toISOString().slice(0, 10);
 
         const res = await fetch(
-          `https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=D&from=${fromTs}&to=${toTs}&token=${key}`
+          `https://financialmodelingprep.com/stable/historical-price-eod/light?symbol=${ticker}&from=${fromStr}&to=${toStr}&apikey=${key}`
         );
         if (res.ok) {
           const data = await res.json();
-          if (data.s === 'ok' && data.c && data.c.length >= 2) {
-            const prices: number[] = data.c;
-            if (prices[0] !== undefined && prices[0] > 0) {
-              reaction1d = ((prices[Math.min(1, prices.length - 1)]! - prices[0]) / prices[0]) * 100;
+          const historical = data?.historical;
+          if (Array.isArray(historical) && historical.length >= 2) {
+            const prices = historical.map((h: any) => h.close).filter((p: any) => p != null);
+            if (prices.length >= 2 && prices[0] > 0) {
+              reaction1d = ((prices[Math.min(1, prices.length - 1)] - prices[0]) / prices[0]) * 100;
             }
           }
         }
@@ -96,7 +97,7 @@ export async function analyzeHistoricalReactions(params: {
       title: opp.title,
     });
 
-    // Rate limit Finnhub calls
+    // Rate limit FMP calls
     await new Promise(r => setTimeout(r, 200));
   }
 

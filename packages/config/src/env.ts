@@ -23,8 +23,8 @@ export const env = {
   // DeepSeek AI (optional — pipeline requires it)
   DEEPSEEK_API_KEY: () => process.env.DEEPSEEK_API_KEY || '',
 
-  // Finnhub Market Data (free tier)
-  FINNHUB_API_KEY: () => process.env.FINNHUB_API_KEY || '',
+  // FMP Market Data (Starter — $19/mo)
+  FMP_API_KEY: () => process.env.FMP_API_KEY || '',
 
   // SAM.gov Federal Contracts (free tier — requires registration)
   SAM_API_KEY: () => process.env.SAM_API_KEY || '',

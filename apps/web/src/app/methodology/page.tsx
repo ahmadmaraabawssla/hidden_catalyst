@@ -80,7 +80,7 @@ surface genuinely underfollowed companies.`}
           <div className="grid gap-3 sm:grid-cols-2">
             {[
               { name: 'SEC EDGAR', desc: '8-K, 10-Q, 10-K, S-1, 13D/G filings. Raw filing text downloaded and analyzed by DeepSeek AI.' },
-              { name: 'Finnhub', desc: 'Real-time prices, market cap, analyst recommendations, institutional ownership.' },
+              { name: 'FMP (Financial Modeling Prep)', desc: 'Real-time prices, market cap, analyst recommendations, institutional ownership.' },
               { name: 'USPTO', desc: 'Patent grants and applications for tracked companies.' },
               { name: 'FDA (openFDA)', desc: 'Drug approvals, designations, and regulatory actions.' },
               { name: 'ClinicalTrials.gov', desc: 'Trial registrations, status updates, and results.' },

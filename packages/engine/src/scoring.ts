@@ -2,7 +2,7 @@
  * Scoring Engine v2 — calculates all opportunity scores with real inputs.
  *
  * Data sources:
- * - Finnhub: market cap, price, analyst coverage, institutional ownership
+ * - FMP: market cap, price, analyst coverage, institutional ownership
  * - SEC EDGAR: filing metadata, form type, dates
  * - DeepSeek LLM: event type, materiality, dollar amounts, parties
  * - Database: existing claims, risks, evidence items

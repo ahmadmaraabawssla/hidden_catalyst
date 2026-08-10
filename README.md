@@ -2,7 +2,7 @@
 
 Evidence-first public-market intelligence for underfollowed U.S.-listed companies.
 
-> **Status:** Production-Ready — Full pipeline with real-time SEC ingestion, Finnhub market data, and auto-scoring.
+> **Status:** Production-Ready — Full pipeline with real-time SEC ingestion, FMP market data, and auto-scoring.
 
 ## What is Hidden Catalyst?
 
