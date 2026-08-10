@@ -224,6 +224,48 @@ async function main() {
   }
   console.log(`  ${updated} valid caps written, ${flaggedUpdates.length} flagged (mc_review → NULL), ${secs.rows.length - validUpdates.length - flaggedUpdates.length} no screener match\n`);
 
+  // ═══ STEP 2c: STALENESS CHECK — detect caps made stale by corporate actions ═══
+  console.log('═══ Step 2c: Staleness Check (corporate actions) ═══');
+  const staleCheck = await client.query(`
+    SELECT s.ticker, s.id as sec_id, s.market_cap, s.latest_price, co.cik
+    FROM securities s
+    JOIN companies co ON co.id = s.company_id
+    JOIN opportunities o ON o.security_id = s.id AND o.status = 'published'
+    WHERE s.market_cap IS NOT NULL
+      AND (s.attributes->>'mc_manual' IS NULL OR s.attributes->>'mc_manual' != 'true')
+      AND (s.attributes->>'mc_stale' IS NULL OR s.attributes->>'mc_stale' != 'true')
+    LIMIT 30
+  `);
+
+  let staleFound = 0;
+  for (const sec of staleCheck.rows) {
+    const incData = await fmpGet(`/income-statement?symbol=${sec.ticker}&period=quarter&limit=1`);
+    if (!Array.isArray(incData) || incData.length === 0) continue;
+
+    const inc = incData[0];
+    const diluted = inc.weightedAverageShsOutDil || inc.weightedAverageShsOut || 0;
+    const price = sec.latest_price || 0;
+    if (diluted <= 0 || price <= 0) continue;
+
+    const screenerShares = Math.round(sec.market_cap / price);
+    const diff = Math.abs(screenerShares - diluted) / Math.max(screenerShares, diluted);
+    const filingDate = new Date(inc.filingDate || inc.date || '1970-01-01');
+    const daysSinceFiling = Math.round((Date.now() - filingDate) / 86400000);
+
+    // Flag if screener shares differ from latest filed diluted shares by > 15%
+    // AND the filing is more than 45 days old (corporate actions likely occurred since)
+    if (diff > 0.15 && daysSinceFiling > 45) {
+      await client.query(
+        `UPDATE securities SET attributes = COALESCE(attributes,'{}'::jsonb) || '{"mc_stale":true,"mc_stale_detail":"screener=${screenerShares.toLocaleString()}sh vs filed=${diluted.toLocaleString()}sh (${daysSinceFiling}d ago)"}'::jsonb
+         WHERE id = $1`, [sec.sec_id]
+      );
+      console.log(`  ⚠ ${sec.ticker.padEnd(6)} stale: screener=${(screenerShares/1e6).toFixed(1)}M sh, filed=${(diluted/1e6).toFixed(1)}M sh (${daysSinceFiling}d ago)`);
+      staleFound++;
+    }
+    await SLEEP(250);
+  }
+  console.log(`  ${staleFound} stale caps flagged\n`);
+
   // ═══ STEP 3: ENRICH PUBLISHED OPPORTUNITIES ═══
   console.log('═══ Step 3: Analyst + Institutional + Consensus + Peers ═══');
 
