@@ -214,9 +214,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           <div className="px-4 py-2 bg-white rounded-lg border border-brand-300 shadow-sm text-center max-w-xs">
             <span className="font-semibold text-brand-700">July 14 Purchase Agreement</span>
             <p className="text-xs text-gray-500 mt-0.5">
-              {facts.some((f: any) => f.text?.includes('[Ref:'))
-                ? (facts.find((f: any) => f.text?.includes('[Ref:'))?.text?.split(': ')[1] || 'Defined terms resolved')
-                : 'Defines Minimum Price, ELOC capacity'}
+              Defines Minimum Price at <span className="font-mono font-semibold text-brand-700">$0.39912</span>
             </p>
           </div>
           <span className="text-gray-400 text-lg">↓ compared with</span>
@@ -258,9 +256,11 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 <div className="text-[10px] text-gray-400">Price</div>
               </div>
               <div className="p-2 bg-gray-50 rounded text-center">
-                <div className="text-sm font-bold text-gray-900 tabular-nums">
-                  {opp.security.marketCap ? formatMC(opp.security.marketCap) : '—'}
-                </div>
+                    {opp.security.marketCap ? (
+                  <div className="text-sm font-bold text-gray-900 tabular-nums">{formatMC(opp.security.marketCap)}</div>
+                ) : (
+                  <div className="text-xs text-amber-600 italic leading-tight">Cap table<br/>reconciliation<br/>required</div>
+                )}
                 <div className="text-[10px] text-gray-400">Market Cap</div>
               </div>
               {marketDepth?.avgVolume > 0 && (
@@ -320,8 +320,13 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
               <div className="p-2 bg-gray-50 rounded">
                 <div className="flex justify-between text-xs">
                   <span className="text-gray-500">Opportunity</span>
-                  <span className="font-bold tabular-nums">{Math.round(scores.opportunity ?? 0)}</span>
+                  <span className="font-bold tabular-nums">
+                    {opp.priceChangePercent != null ? Math.round(scores.opportunity ?? 0) : (<span className="text-amber-600 text-xs">Prelim</span>)}
+                  </span>
                 </div>
+                {opp.priceChangePercent == null && (
+                  <div className="text-[10px] text-amber-600 mt-0.5">4/10 inputs — low confidence</div>
+                )}
               </div>
               <div className="p-2 bg-gray-50 rounded">
                 <div className="flex justify-between text-xs">
@@ -456,11 +461,11 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             </section>
           )}
 
-          {/* ── CONTRADICTIONS ── */}
+          {/* ── COUNTER-EVIDENCE ── */}
           {contradictions.length > 0 && (
             <section className="card border-red-200">
-              <h2 className="text-base font-semibold text-red-800 mb-3">Contradictions</h2>
-              <p className="text-xs text-red-500 mb-2">Evidence that argues against the thesis</p>
+              <h2 className="text-base font-semibold text-red-800 mb-3">Counter-Evidence &amp; Thesis Limitations</h2>
+              <p className="text-xs text-red-500 mb-2">Evidence that weakens the thesis or reduces its magnitude</p>
               <ul className="space-y-1.5">
                 {contradictions.map((r, i) => (
                   <li key={i} className="text-sm text-red-700 flex items-start gap-2">
@@ -567,21 +572,24 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
               const cashKnown = hiddenAngle?.cashExposure?.amount != null && !hiddenAngle?.cashExposure?.likelihood?.includes('uncertain');
               const capStructurePartial = hiddenAngle?.capitalOverhang != null && hiddenAngle?.capitalOverhang?.includes('Partial');
               const checks = [
-                { label: 'Primary source verified', ok: facts.length > 0 },
-                { label: 'Hidden angle identified', ok: !!(hiddenAngle?.claim) },
-                { label: 'Defined terms resolved', ok: hasRefTag },
-                { label: 'Financial materiality', ok: cashKnown ? true : 'partial' as const },
-                { label: 'Capital structure', ok: capStructurePartial ? 'partial' as const : !!(hiddenAngle?.capitalOverhang) },
-                { label: 'Price reaction computed', ok: opp.priceChangePercent != null },
-                { label: 'Catalyst attention measured', ok: false as const },
-                { label: 'Contradiction search', ok: contradictions.length > 0 },
-                { label: 'Historical comparables', ok: historicalSummary != null && !historicalSummary.includes('Insufficient') },
-                { label: 'Monitoring triggers set', ok: whatToWatch.length > 0 },
+                { label: 'Primary source verified', ok: facts.length > 0, weight: 3 },
+                { label: 'Hidden angle identified', ok: !!(hiddenAngle?.claim), weight: 3 },
+                { label: 'Contract terms resolved', ok: hasRefTag ? 'partial' as const : false, weight: 3 },
+                { label: 'Financial materiality', ok: cashKnown ? true : 'partial' as const, weight: 3 },
+                { label: 'Capital structure', ok: capStructurePartial ? 'partial' as const : !!(hiddenAngle?.capitalOverhang), weight: 2 },
+                { label: 'Price reaction computed', ok: opp.priceChangePercent != null, weight: 2 },
+                { label: 'Catalyst attention measured', ok: false as const, weight: 1 },
+                { label: 'Counter-evidence search', ok: contradictions.length > 0, weight: 2 },
+                { label: 'Historical comparables', ok: historicalSummary != null && !historicalSummary.includes('Insufficient'), weight: 1 },
+                { label: 'Monitoring triggers set', ok: whatToWatch.length > 0, weight: 1 },
               ];
-              const countOk = checks.filter(c => c.ok === true).length;
-              const countPartial = checks.filter(c => c.ok === 'partial').length;
-              const total = checks.length;
-              const pct = Math.round(((countOk + countPartial * 0.5) / total) * 100);
+              var totalWeight = 0, earnedWeight = 0;
+              checks.forEach(function(c: any) {
+                totalWeight += c.weight;
+                if (c.ok === true) earnedWeight += c.weight;
+                else if (c.ok === 'partial') earnedWeight += c.weight * 0.5;
+              });
+              const pct = Math.round((earnedWeight / totalWeight) * 100);
               return (
                 <div>
                   <div className="flex items-center gap-3 mb-3">
@@ -708,17 +716,10 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 <div>
                   <h3 className="text-xs font-semibold text-amber-700 uppercase mb-1">Not Yet Resolved</h3>
                   <ul className="space-y-1">
-                    {!hiddenAngle?.cashExposure?.trigger?.includes('uncertain') && hiddenAngle?.cashExposure?.amount ? (
-                      <li className="text-sm text-green-800 flex items-start gap-2">
-                        <span className="shrink-0 mt-0.5">✓</span>
-                        <span>Materiality plausible</span>
-                      </li>
-                    ) : (
-                      <li className="text-sm text-amber-800 flex items-start gap-2">
-                        <span className="shrink-0 mt-0.5 text-amber-400">◐</span>
-                        <span>Materiality not yet quantified — cash data needed</span>
-                      </li>
-                    )}
+                    <li className="text-sm text-amber-800 flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5 text-amber-400">◐</span>
+                      <span>Financial materiality plausible but not quantified — cash data needed</span>
+                    </li>
                     <li className="text-sm text-gray-400 flex items-start gap-2">
                       <span className="shrink-0 mt-0.5 text-gray-300">○</span>
                       <span>Price reaction pending — filing-day return data</span>
