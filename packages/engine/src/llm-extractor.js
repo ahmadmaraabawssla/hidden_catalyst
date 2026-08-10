@@ -1,152 +1,65 @@
-// Hidden Catalyst — LLM Extraction Engine (CommonJS)
-// Uses DeepSeek API to read and understand SEC filings.
-// DeepSeek: OpenAI-compatible, $0.14/1M tokens
-
+/**
+ * Hidden Catalyst — LLM Extraction Engine v2
+ * Two-pass: structured facts then hidden angle discovery.
+ * "NO_HIDDEN_ANGLE" is a valid and frequent outcome.
+ */
 const DEEPSEEK_API = 'https://api.deepseek.com/v1/chat/completions';
 const MODEL = 'deepseek-chat';
-
 let API_KEY = process.env.DEEPSEEK_API_KEY || '';
-
 function setApiKey(key) { API_KEY = key; }
 
-const SYSTEM_PROMPT =
-  'You are an expert financial analyst at Hidden Catalyst, a research platform that discovers material public developments for underfollowed public companies. ' +
-  'Your task: read an SEC 8-K filing and extract structured intelligence. ' +
-  'CRITICAL RULES: 1. Only extract information EXPLICITLY stated in the filing. Do not fabricate. ' +
-  '2. Separate verified facts (direct quotes from filing) from inferences (your analysis). ' +
-  '3. For dollar amounts, extract the exact figure. If unclear, note uncertainty. ' +
-  '4. For parties, use legal names as stated. ' +
-  '5. Materiality score 0-100: 90+ acquisition/major contract/CEO departure, 70-89 material agreement, 50-69 regulatory, 30-49 routine, 10-29 procedural. ' +
-  '6. Overlooked reasons: be SPECIFIC and data-driven. Not "small company" but "Only 2 analysts cover this $300M company; filed 4:30 PM Friday; no press release." ' +
-  '7. Scenarios: bull (best realistic), base (most likely), bear (worst realistic). Never claim guaranteed outcomes. ' +
-  '8. Respond ONLY with valid JSON. No markdown, no explanation outside JSON.';
+const PROFILES = {
+  bdc: { name:'BDC', metrics:['Total investment income','Net investment income','NII/share','NAV','NAV/share','Portfolio fair value','Portfolio companies','New investments','Repayments','Weighted avg portfolio yield','Non-accrual rate','PIK income','Realized gains/losses','Unrealized gains/losses','Total debt','Cost of debt','Leverage','Distribution declared','Distribution coverage'] },
+  bank: { name:'Bank', metrics:['Total deposits','Net interest margin','CET1 ratio','Loan growth','Deposit costs','Credit loss provisions','Tangible book value/share','Efficiency ratio','NPL ratio'] },
+  biotech: { name:'Biotech', metrics:['Cash','Cash runway','R&D expense','Trial phase','Patient enrollment','FDA milestone dates','Partnership revenue'] },
+  saas: { name:'SaaS', metrics:['ARR','Net retention rate','Gross margin','Free cash flow','RPO','Customer count'] },
+  industrial: { name:'Industrial', metrics:['Revenue','Backlog','Gross margin','Operating income','Capacity utilization','Customer concentration','CapEx'] },
+  general: { name:'General', metrics:['Revenue','Revenue growth','EPS','Gross margin','Operating margin','Cash','Total debt','Free cash flow','Guidance'] },
+};
 
-function buildPrompt(filingText, companyName, ticker, formType) {
-  return 'Analyze this ' + formType + ' filing from ' + companyName + ' (' + ticker + '):\n\n---\n' +
-    filingText.slice(0, 12000) + '\n---\n\n' +
-    'Return a JSON object with these fields:\n' +
-    '{\n' +
-    '  "eventType": "string (e.g., material_agreement, acquisition, earnings, director_change, regulatory, other)",\n' +
-    '  "eventSummary": "One paragraph plain English summary of what happened",\n' +
-    '  "parties": [{"name": "Company or person", "role": "counterparty/acquirer/target/officer"}],\n' +
-    '  "dollarAmounts": [{"amount": 42000000, "currency": "USD", "description": "Contract value"}],\n' +
-    '  "materialityScore": 75,\n' +
-    '  "materialityRationale": "Why this score",\n' +
-    '  "overlookedReasons": ["Reason 1", "Reason 2", "Reason 3"],\n' +
-    '  "bullCase": "Best realistic outcome scenario",\n' +
-    '  "baseCase": "Most likely outcome",\n' +
-    '  "bearCase": "Worst realistic outcome",\n' +
-    '  "verifiedFacts": ["Direct quote or near-quote fact from the filing"],\n' +
-    '  "inferences": [{"text": "Inference text", "confidence": 0.75}],\n' +
-    '  "riskFlags": [{"type": "regulatory/execution/market/financial", "severity": "low/medium/high", "description": "Specific risk"}],\n' +
-    '  "confidence": 0.85,\n' +
-    '  "uncertaintyNotes": ["What you are unsure about"]\n' +
-    '}';
+function detectProfile(company, ticker, form, sector) {
+  var n = (company+' '+sector+' '+form).toLowerCase();
+  if (/bdc|business.?development|capital.?corp|capital.?inc/i.test(n)||ticker==='TRIN')return 'bdc';
+  if (sector==='Financial Services'||/bancorp|bank|financial/i.test(n))return 'bank';
+  if (sector==='Healthcare'&&(/therapeutics|pharma|bio[lt]|medicine/i.test(n)))return 'biotech';
+  if (sector==='Technology'&&(/software|cloud|saas/i.test(n)))return 'saas';
+  if (sector==='Industrials'||/manufacturing|industrial/i.test(n))return 'industrial';
+  return 'general';
 }
 
-async function extractFromFiling(filingText, companyName, ticker, formType) {
-  formType = formType || '8-K';
-  if (!API_KEY) {
-    console.error('[LLM] No API key set.');
-    return null;
-  }
-
+async function callAI(messages, timeout) {
   try {
-    const response = await fetch(DEEPSEEK_API, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + API_KEY,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: buildPrompt(filingText, companyName, ticker, formType) },
-        ],
-        temperature: 0.1,
-        max_tokens: 4000,
-        response_format: { type: 'json_object' },
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text().catch(function() { return ''; });
-      console.error('[LLM] DeepSeek API error ' + response.status + ': ' + errText.slice(0, 200));
-      return null;
-    }
-
-    const data = await response.json();
-    const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-
-    if (!content) {
-      console.error('[LLM] Empty response');
-      return null;
-    }
-
-    const parsed = JSON.parse(content);
-
-    // Validate required
-    if (!parsed.eventType || !parsed.eventSummary) {
-      console.error('[LLM] Missing required fields');
-      return null;
-    }
-
-    // Normalize
-    const result = {
-      eventType: String(parsed.eventType || 'other').toLowerCase().replace(/\s+/g, '_'),
-      eventSummary: String(parsed.eventSummary || '').slice(0, 500),
-      parties: Array.isArray(parsed.parties) ? parsed.parties.map(function(p) {
-        return { name: String(p.name || '').slice(0, 100), role: String(p.role || '').slice(0, 50) };
-      }) : [],
-      dollarAmounts: Array.isArray(parsed.dollarAmounts) ? parsed.dollarAmounts.map(function(a) {
-        return { amount: Number(a.amount) || 0, currency: String(a.currency || 'USD'), description: String(a.description || '').slice(0, 200) };
-      }) : [],
-      materialityScore: Math.max(10, Math.min(100, Number(parsed.materialityScore) || 50)),
-      materialityRationale: String(parsed.materialityRationale || '').slice(0, 300),
-      overlookedReasons: Array.isArray(parsed.overlookedReasons) ? parsed.overlookedReasons.map(String).slice(0, 3) : [],
-      bullCase: String(parsed.bullCase || '').slice(0, 400),
-      baseCase: String(parsed.baseCase || '').slice(0, 400),
-      bearCase: String(parsed.bearCase || '').slice(0, 400),
-      verifiedFacts: Array.isArray(parsed.verifiedFacts) ? parsed.verifiedFacts.map(String).slice(0, 8) : [],
-      inferences: Array.isArray(parsed.inferences) ? parsed.inferences.map(function(i) {
-        return { text: String(i.text || '').slice(0, 300), confidence: Math.max(0.1, Math.min(1.0, Number(i.confidence) || 0.5)) };
-      }).slice(0, 4) : [],
-      riskFlags: Array.isArray(parsed.riskFlags) ? parsed.riskFlags.map(function(r) {
-        return {
-          type: String(r.type || 'other'),
-          severity: ['low','medium','high'].indexOf(r.severity) >= 0 ? r.severity : 'medium',
-          description: String(r.description || '').slice(0, 200)
-        };
-      }).slice(0, 5) : [],
-      confidence: Math.max(0.1, Math.min(1.0, Number(parsed.confidence) || 0.7)),
-      uncertaintyNotes: Array.isArray(parsed.uncertaintyNotes) ? parsed.uncertaintyNotes.map(String).slice(0, 5) : [],
-    };
-
-    console.log('[LLM] Extracted: ' + result.eventType + ' (materiality: ' + result.materialityScore + ', confidence: ' + result.confidence + ')');
-    return result;
-
-  } catch (err) {
-    console.error('[LLM] Error: ' + (err.message || err));
-    return null;
-  }
+    var r = await fetch(DEEPSEEK_API,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify({model:MODEL,messages:messages,temperature:0.1,max_tokens:4000,response_format:{type:'json_object'}}),signal:AbortSignal.timeout(timeout||30000)});
+    if(!r.ok)return null;
+    var d = await r.json();
+    var c = d&&d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content;
+    return c ? JSON.parse(c) : null;
+  }catch(e){return null}
 }
 
-async function extractBatch(filings, concurrency) {
-  concurrency = concurrency || 3;
-  var results = [];
-  for (var i = 0; i < filings.length; i += concurrency) {
-    var batch = filings.slice(i, i + concurrency);
-    var batchResults = await Promise.all(batch.map(function(f) {
-      return extractFromFiling(f.text, f.companyName, f.ticker, f.formType);
-    }));
-    results = results.concat(batchResults);
-    if (i + concurrency < filings.length) {
-      await new Promise(function(r) { setTimeout(r, 1000); });
-    }
-  }
-  return results;
+function pass1Prompt(text, company, ticker, form, profile) {
+  var metrics = profile.metrics.map(function(m){return '    "'+m+'": "value or null"';}).join(',\n');
+  return 'Extract structured facts from '+form+' by '+company+' ('+ticker+'), '+profile.name+' sector.\nReturn JSON:\n{\n'+metrics+'\n}\nOnly extract EXPLICITLY stated values. Use null if absent. No estimates.\n\nFiling:\n'+text.slice(0,14000);
 }
 
-module.exports = { extractFromFiling, extractBatch, setApiKey };
+function pass2Prompt(text, company, ticker, form, profile, factsStr) {
+  return 'You are Hidden Catalyst. Determine if this '+form+' from '+company+' ('+ticker+') contains a HIDDEN opportunity.\n\nCRITICAL: "NO_HIDDEN_ANGLE" is the DEFAULT answer. Most filings are routine.\n\n'+profile.name+' sector. Facts:\n'+factsStr.slice(0,3000)+'\n\nRULES:\n1. Routine earnings/dividends/reports do NOT qualify\n2. A hidden angle needs SPECIFIC evidence from the filing\n3. The angle must be NON-OBVIOUS (not in the press release title)\n4. Actively search for CONTRADICTIONS\n\nReturn JSON:\n{"isRoutine":true/false,"hiddenAngle":null or {"claim":"...","supportingEvidence":"direct quote","reasoning":"...","confidence":0.75},"contradictions":["..."],"whatToWatch":["..."],"materialityScore":50,"catalystAttentionScore":50,"riskFlags":[],"shouldQualify":true/false}\n\nFiling:\n'+text.slice(0,10000);
+}
+
+async function extractFromFiling(filingText, companyName, ticker, formType, sector) {
+  formType = formType||'8-K';
+  if(!API_KEY||!filingText||filingText.length<100)return null;
+  var profile = PROFILES[detectProfile(companyName,ticker,formType,sector||'')];
+  console.log('  [LLM v2] '+ticker+': '+profile.name+' profile, Pass 1...');
+  var facts = await callAI([{role:'system',content:'Extract structured financial facts. Return JSON only. Never fabricate.'},{role:'user',content:pass1Prompt(filingText,companyName,ticker,formType,profile)}],25000);
+  if(!facts){return null}
+  console.log('  [LLM v2] '+ticker+': Pass 2 — hidden angle...');
+  var a = await callAI([{role:'system',content:'You are a critical researcher. Default answer: NO_HIDDEN_ANGLE. Only flag concrete evidence-backed insights.'},{role:'user',content:pass2Prompt(filingText,companyName,ticker,formType,profile,JSON.stringify(facts))}],30000);
+  if(!a){return null}
+  var qualified = a.shouldQualify===true&&a.hiddenAngle!=null&&!a.isRoutine;
+  var ha = a.hiddenAngle||null;
+  console.log('  [LLM v2] '+ticker+': routine='+a.isRoutine+' hidden='+(ha!=null)+' qualify='+qualified);
+  return {eventType:'other',eventSummary:'['+formType+'] '+companyName+' ('+ticker+') — '+(a.isRoutine?'Routine disclosure':(ha?ha.claim.slice(0,80):'Analysis pending')),verifiedFacts:Object.entries(facts||{}).filter(function(e){return e[1]!=null&&e[1]!==''}).map(function(e){return e[0]+': '+e[1]}),inferences:ha?[{text:ha.claim,confidence:ha.confidence||0.7}]:[],materialityScore:a.materialityScore||50,overlookedReasons:ha?[ha.reasoning]:[],riskFlags:a.riskFlags||[],confidence:ha?ha.confidence||0.5:0.5,qualified:qualified,hiddenAngle:ha,isRoutine:a.isRoutine,contradictions:a.contradictions||[],whatToWatch:a.whatToWatch||[],catalystAttentionScore:a.catalystAttentionScore||50,extractedFacts:facts,industryProfile:profile.name};
+}
+
+module.exports = { setApiKey, extractFromFiling, detectProfile, PROFILES };

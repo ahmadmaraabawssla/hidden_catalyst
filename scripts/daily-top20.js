@@ -158,52 +158,81 @@ async function main() {
       } catch {}
     }
 
-    // Run DeepSeek if we have text
+    // Run DeepSeek v2 — two-pass extraction with rejection capability
     let extraction = null;
     if (filingText.length > 200) {
-      extraction = await extractFromFiling(filingText, co.display_name, co.ticker, co.formType);
+      extraction = await extractFromFiling(filingText, co.display_name, co.ticker, co.formType, co.sector);
       if (extraction) aiProcessed++;
-      await sleep(2000); // Rate limit
+      await sleep(2000);
     }
 
-    // Build and store — V2 scoring
+    // ── V3 QUALIFICATION GATE ──
+    // Does this filing contain a genuine hidden opportunity?
+    // If extraction returned qualified===false, store as REJECTED or WATCH.
+    if (!extraction || !extraction.qualified) {
+      const reason = extraction?.isRoutine ? 'routine_filing' : 'no_hidden_angle';
+      const verStatus = extraction?.isRoutine ? 'rejected' : 'watch';
+      const hiddenAngle = extraction?.hiddenAngle || null;
+
+      // Store as rejected/watch for audit trail
+      const hash = 'dly_' + co.cik + '_' + co.accessionNumber.replace(/-/g, '').slice(0, 14);
+      const title = extraction
+        ? `[${verStatus.toUpperCase()}] ${co.display_name} (${co.ticker}) — ${co.formType}`
+        : `${co.display_name} (${co.ticker}) — ${co.formType} (skipped)`;
+
+      try {
+        await client.query(
+          `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,created_at,updated_at)
+           VALUES($1,$2,$3,$4,'rejected',$5,$6,$7,NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
+          ['o_' + hash, co.sec_id, title,
+           `[Rejected: ${reason}] ${co.display_name} filed ${co.formType} on ${co.filingDate}. No hidden angle identified.`,
+           verStatus,
+           hiddenAngle ? JSON.stringify(hiddenAngle) : null,
+           co.filingDate]
+        );
+      } catch (e) { /* duplicate */ }
+
+      if (verStatus === 'rejected') {
+        console.log(`  ❌ ${co.ticker}: REJECTED (${reason})`);
+      } else {
+        console.log(`  👁 ${co.ticker}: WATCH (${reason}) — stored for review`);
+      }
+      continue; // Skip to next company — do NOT publish
+    }
+
+    // ── Build and store — V3 scoring (only for qualified opportunities) ──
     const materiality = extraction?.materialityScore || (co.formType === '8-K' ? 65 : 55);
     const mc = co.mc;
     const daysSince = Math.round((Date.now() - new Date(co.filingDate).getTime()) / 86400000);
 
-    // V2 Information Asymmetry
-    let mcScore;
-    if (mc < 100e6) mcScore = 40;
-    else if (mc < 300e6) mcScore = 38;
-    else if (mc < 500e6) mcScore = 35;
-    else if (mc < 1e9) mcScore = 30;
-    else if (mc < 2e9) mcScore = 25;
-    else if (mc < 5e9) mcScore = 18;
-    else if (mc < 10e9) mcScore = 10;
-    else if (mc < 50e9) mcScore = 5;
-    else mcScore = 2;
-    const infoAsym = Math.min(100, mcScore + 10 + 5 + 5);
+    // Company Attention (higher = more overlooked)
+    let companyAttn;
+    if (mc < 100e6) companyAttn = 38; else if (mc < 300e6) companyAttn = 35;
+    else if (mc < 500e6) companyAttn = 30; else if (mc < 1e9) companyAttn = 25;
+    else if (mc < 2e9) companyAttn = 18; else if (mc < 5e9) companyAttn = 10;
+    else if (mc < 10e9) companyAttn = 5; else companyAttn = 2;
 
-    // V2 Evidence Quality
-    let evidenceQual = extraction ? 88 : 82;
-    if (daysSince <= 3) evidenceQual += 3;
-    else if (daysSince <= 7) evidenceQual += 0;
-    else if (daysSince <= 14) evidenceQual -= 3;
-    else evidenceQual -= 8;
+    // Catalyst Attention (higher = more overlooked — inverted from LLM assessment)
+    const catalystAttn = extraction?.catalystAttentionScore
+      ? (100 - extraction.catalystAttentionScore)
+      : (co.formType === '8-K' ? 40 : 20);
+    const infoAsym = Math.min(100, companyAttn + catalystAttn + 5);
+
+    let evidenceQual = extraction ? 85 : 80;
+    if (daysSince <= 3) evidenceQual += 3; else if (daysSince <= 7) evidenceQual += 0;
+    else if (daysSince <= 14) evidenceQual -= 3; else evidenceQual -= 8;
     evidenceQual = Math.max(10, Math.min(100, evidenceQual));
 
-    // V2 Catalyst & Materiality — scaled by company size
-    const mcScale = mc < 300e6 ? 1.3 : mc < 1e9 ? 1.1 : mc < 5e9 ? 1.0 : mc < 10e9 ? 0.85 : 0.7;
-    const catalystStr = Math.round(Math.min(95, Math.max(30, 60 * mcScale)));
-    const finMateriality = Math.round(Math.min(95, Math.max(25, 55 * mcScale)));
+    const catalystStr = Math.min(95, Math.max(30, materiality));
+    const finMateriality = Math.min(95, Math.max(25, materiality));
     const timing = daysSince <= 1 ? 95 : daysSince <= 3 ? 85 : daysSince <= 7 ? 70 : daysSince <= 14 ? 50 : 30;
-    const priceReaction = mc < 2e9 ? 75 : mc < 10e9 ? 60 : 40;
+    const priceReaction = Math.min(90, Math.max(30, catalystAttn + (daysSince <= 3 ? 15 : 0)));
     const riskScore = mc < 100e6 ? 60 : mc < 300e6 ? 50 : mc < 1e9 ? 40 : mc < 5e9 ? 30 : 20;
     const liquidityPenalty = mc < 100e6 ? 35 : mc < 300e6 ? 20 : mc < 1e9 ? 10 : 0;
 
     const oppScore = Math.round(Math.max(5, Math.min(98,
-      0.25 * infoAsym + 0.20 * catalystStr + 0.20 * evidenceQual +
-      0.15 * finMateriality + 0.10 * timing + 0.10 * priceReaction -
+      0.25 * infoAsym + 0.15 * catalystStr + 0.20 * evidenceQual +
+      0.15 * finMateriality + 0.10 * timing + 0.15 * priceReaction -
       0.10 * riskScore - 0.05 * liquidityPenalty
     )));
 
@@ -226,8 +255,10 @@ async function main() {
         ['e_' + hash, 'd_' + hash, (extraction?.verifiedFacts[0] || summary).slice(0, 500), 'primary', evidenceQual]
       );
       await client.query(
-        'INSERT INTO opportunities(id,security_id,title,summary,status,detected_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,NOW(),NOW()) ON CONFLICT(id) DO NOTHING',
-        ['o_' + hash, co.sec_id, title, summary, 'candidate', co.filingDate]
+        'INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW()) ON CONFLICT(id) DO NOTHING',
+        ['o_' + hash, co.sec_id, title, summary, 'candidate', 'candidate',
+         extraction?.hiddenAngle ? JSON.stringify(extraction.hiddenAngle) : null,
+         co.filingDate]
       );
       await client.query(
         'INSERT INTO claims(id,opportunity_id,claim_type,text,confidence,evidence_item_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT(id) DO NOTHING',
@@ -243,17 +274,36 @@ async function main() {
         }
       }
 
-      for (const [t, v] of [['opportunity', oppScore], ['information_asymmetry', infoAsym], ['catalyst_strength', catalystStr], ['evidence_quality', evidenceQual], ['financial_materiality', finMateriality], ['timing', timing], ['price_reaction', priceReaction], ['risk', riskScore]]) {
+      for (const [t, v] of [['opportunity', oppScore], ['information_asymmetry', infoAsym], ['company_attention', companyAttn], ['catalyst_attention', catalystAttn], ['catalyst_strength', catalystStr], ['evidence_quality', evidenceQual], ['financial_materiality', finMateriality], ['timing', timing], ['price_reaction', priceReaction], ['risk', riskScore]]) {
         await client.query(
           'INSERT INTO scores(id,opportunity_id,score_type,value,factors,model_version,calculated_at) VALUES($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT(id) DO NOTHING',
-          ['s_' + t + '_' + hash, 'o_' + hash, t, v, JSON.stringify({ mc, aiExtracted: !!extraction, pipeline: 'daily-top20' }), '3.0.0']
+          ['s_' + t + '_' + hash, 'o_' + hash, t, v, JSON.stringify({ mc, companyAttn, catalystAttn, aiExtracted: !!extraction, pipeline: 'daily-top20-v3' }), '3.0.0']
         );
+      }
+
+      // Contradictions
+      if (extraction?.contradictions && extraction.contradictions.length > 0) {
+        for (let j = 0; j < extraction.contradictions.length; j++) {
+          await client.query(
+            'INSERT INTO risks(id,opportunity_id,risk_type,severity,description,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
+            ['ct_' + j + '_' + hash, 'o_' + hash, 'contradiction', 'medium', extraction.contradictions[j]]
+          );
+        }
+      }
+
+      // What to watch
+      if (extraction?.whatToWatch && extraction.whatToWatch.length > 0) {
+        for (let j = 0; j < extraction.whatToWatch.length; j++) {
+          await client.query(
+            'INSERT INTO invalidation_rules(id,opportunity_id,rule_type,definition,status,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
+            ['wt_' + j + '_' + hash, 'o_' + hash, 'confirmation', JSON.stringify({ signal: extraction.whatToWatch[j] }), 'monitoring']
+          );
+        }
       }
 
       const reasons = extraction?.overlookedReasons || [
         `Market cap of $${(mc / 1e9).toFixed(1)}B — limited analyst coverage`,
         `${co.formType} filing — ${co.formType === '8-K' ? 'unscheduled disclosure' : 'periodic report'}`,
-        'SEC EDGAR primary source — may not be widely covered'
       ];
       for (let j = 0; j < reasons.length; j++) {
         await client.query(
@@ -272,8 +322,10 @@ async function main() {
       }
 
       if (evidenceQual >= 70 && riskScore <= 65) {
-        await client.query("UPDATE opportunities SET status='published',published_at=NOW() WHERE id=$1", ['o_' + hash]);
+        await client.query("UPDATE opportunities SET status='published',verification_status='verified',published_at=NOW() WHERE id=$1", ['o_' + hash]);
         published++;
+      } else {
+        await client.query("UPDATE opportunities SET status='candidate',verification_status='candidate' WHERE id=$1", ['o_' + hash]);
       }
 
     } catch (e) { /* duplicate */ }

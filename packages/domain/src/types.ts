@@ -18,6 +18,8 @@ export type ClaimType =
 
 // Score categories
 export type ScoreType =
+  | 'company_attention'
+  | 'catalyst_attention'
   | 'information_asymmetry'
   | 'catalyst_strength'
   | 'evidence_quality'

@@ -226,6 +226,8 @@ model Opportunity {
   title        String
   summary      String?
   status       String   @default("candidate") // candidate, needs_review, approved, published, rejected, archived, invalidated
+  verificationStatus String? @default("candidate") @map("verification_status") // rejected, watch, candidate, verified, monitoring, confirmed, invalidated, stale
+  hiddenAngle  Json?    @map("hidden_angle") // claim, supportingEvidence, reasoning, confidence
   detectedAt   DateTime @default(now()) @map("detected_at")
   publishedAt  DateTime? @map("published_at")
   confidence   Float?
