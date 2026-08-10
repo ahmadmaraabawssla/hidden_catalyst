@@ -97,7 +97,7 @@ Some stocks report `freeFloat` > 100% in `shares-float` (e.g., XE: 782%). This s
 fmp-updater.js (daily)
   │
   ├─ Step 1: company-screener → index by symbol (~9 API calls)
-  │     Filter: cap ≤ $3T (kill foreign currency), skip "mc_manual"
+  │     Refresh every non-manual cap; filter cap ≤ $3T (foreign-currency guard)
   │
   ├─ Step 2: Batch UPDATE valid caps
   │     ≤200 rows per SQL query (CASE-based)
