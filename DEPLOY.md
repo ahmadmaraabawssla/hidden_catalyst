@@ -5,7 +5,7 @@
 - [ ] **Vercel account** — https://vercel.com (free Hobby plan)
 - [ ] **GitHub repository** — push this repo
 - [ ] **Supabase project** — already running at `xrfoyckeohsuexoybbxm.supabase.co`
-- [ ] **Finnhub API key** — already configured in `.env`
+- [ ] **FMP API key** — already configured in `.env`
 
 ## Step 1: Push to GitHub
 
@@ -27,7 +27,7 @@ git push origin main
 4. Add Environment Variables (copy from `.env`):
    ```
    DATABASE_URL=postgresql://postgres.xrfoyckeohsuexoybbxm:[PASSWORD]@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
-   FINNHUB_API_KEY=d9qj68hr01qk3bv07i10d9qj68hr01qk3bv07i1g
+   FMP_API_KEY=o2CG0TwWzkqWxU9hz0kb7fW6dCzYXAMx
    CRON_SECRET=dev-secret
    ADMIN_SECRET=dev-admin-secret
    NEXT_PUBLIC_APP_URL=https://hidden-catalyst.vercel.app
@@ -53,7 +53,7 @@ This auto-runs the SEC pipeline every 2 hours. Vercel Hobby includes 1 cron job 
 ### Option B: Via local command
 ```bash
 node scripts/run-seed.js
-node scripts/finnhub-updater.js 60
+node scripts/fmp-updater.js
 ```
 
 ## Post-Deployment
@@ -64,7 +64,7 @@ After deploy, the app is live at `https://hidden-catalyst.vercel.app` (or your c
 
 Run locally once per day:
 ```bash
-node scripts/finnhub-updater.js 240
+node scripts/fmp-updater.js
 ```
 
 (Supabase SQL connection works from anywhere — this updates market caps in the cloud database)
@@ -92,7 +92,7 @@ Visit `/admin` — in production, set a real `ADMIN_SECRET` in Vercel env vars a
                    │
      ┌─────────────┼─────────────┐
      ▼             ▼             ▼
-  Finnhub      SEC EDGAR      FDA/USPTO
+  FMP           SEC EDGAR      FDA/USPTO
   (market      (filings)      (free APIs)
    caps)
 ```
@@ -103,13 +103,13 @@ Visit `/admin` — in production, set a real `ADMIN_SECRET` in Vercel env vars a
 |---------|------|------|
 | Vercel | Hobby | Free |
 | Supabase | Free (500MB DB) | Free |
-| Finnhub | Free (60 calls/min) | Free |
+| FMP | Starter ($19/mo, 300 calls/min) | $19/mo |
 | SEC EDGAR | Public API | Free |
-| **Total** | | **$0/month** |
+| **Total** | | **$19/month** |
 
 ## Known Limitations
 
-- **Market caps**: Updated manually via `finnhub-updater.js`. For real-time, upgrade to Polygon.io ($29/mo).
+- **Market caps**: Updated via `fmp-updater.js` (FMP Starter, $19/mo). Run daily or use Vercel Cron.
 - **Analyst coverage**: Not available on free APIs. Would need Polygon.io or Refinitiv.
 - **Email alerts**: Not wired. Would need Resend (free: 100 emails/day).
 - **Authentication**: Deferred. Users see public data only.

@@ -121,8 +121,8 @@ async function bootstrap() {
   console.log(`  Total companies: ${counts.rows[0].total}`);
   console.log(`  In $100M-$10B range: ${counts.rows[0].small_mid_cap}`);
   console.log(`  Liquid (>$1M avg volume): ${counts.rows[0].liquid}`);
-  console.log('\nNext step: run market data updater to fill in market caps and volumes.');
-  console.log('  node -e "const{updateAllMarketData}=require(\'./packages/engine/src/market-data\');updateAllMarketData()"');
+  console.log('\nNext step: run market cap + price updater to fill in market caps and volumes.');
+  console.log('  node scripts/fmp-updater.js');
 
   await client.end();
   process.exit(0);
