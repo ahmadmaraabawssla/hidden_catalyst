@@ -48,32 +48,38 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
   const tab = (searchParams.tab as string) || 'hidden';
   const sort = (searchParams.sort as 'opportunity' | 'recent' | 'asymmetry') || 'opportunity';
 
-  const vsFilter = tab === 'hidden' ? ['candidate', 'verified'] :
-    tab === 'queue' ? 'watch' : 'rejected';
+  const { opportunities: allOpps, total: totalPublished } = await getPublishedOpportunities({ sort, limit: 100 });
 
-  const { opportunities: allOpps, total: totalPublished } = await getPublishedOpportunities({ sort, limit: 50 });
+  // Filter by tab
+  const opportunities = allOpps.filter((o: any) => {
+    var vs = o.verificationStatus;
+    var ev = (o as any).engine_version || 'v1_legacy';
+    if (tab === 'hidden') return (vs === 'candidate' || vs === 'verified') && ev !== 'v1_legacy';
+    if (tab === 'queue') return vs === 'watch';
+    if (tab === 'reprocess') return ev === 'v1_legacy';
+    if (tab === 'rejected') return vs === 'rejected' && ev !== 'v1_legacy';
+    return false;
+  });
 
-  // Filter by verificationStatus in memory (Prisma client not regenerated)
-  const opportunities = allOpps.filter((o: any) =>
-    vsFilter === 'watch' ? o.verificationStatus === 'watch' :
-    vsFilter === 'rejected' ? o.verificationStatus === 'rejected' :
-    Array.isArray(vsFilter) ? vsFilter.includes(o.verificationStatus) :
-    o.verificationStatus === vsFilter
-  );
-
-  // Use raw PG for tab counts
-  let hcCount = 0, wCount = 0, rCount = 0;
+  // Tab counts via raw PG
+  let hcCount = 0, wCount = 0, rpCount = 0, rCount = 0;
   try {
     const { Client } = await import('pg');
     const pg = new Client({ connectionString: process.env.DATABASE_URL });
     await pg.connect();
     const counts = await pg.query(
-      `SELECT verification_status, COUNT(*) as cnt FROM opportunities WHERE status = 'published' GROUP BY verification_status`
+      `SELECT
+         COUNT(*) FILTER (WHERE verification_status IN ('candidate','verified') AND COALESCE(engine_version,'v1_legacy') != 'v1_legacy') as hidden,
+         COUNT(*) FILTER (WHERE verification_status = 'watch') as queue,
+         COUNT(*) FILTER (WHERE COALESCE(engine_version,'v1_legacy') = 'v1_legacy') as reprocess,
+         COUNT(*) FILTER (WHERE verification_status = 'rejected' AND COALESCE(engine_version,'v1_legacy') != 'v1_legacy') as rejected
+       FROM opportunities WHERE status = 'published'`
     );
-    for (const row of counts.rows) {
-      if (row.verification_status === 'candidate' || row.verification_status === 'verified') hcCount += Number(row.cnt);
-      else if (row.verification_status === 'watch') wCount += Number(row.cnt);
-      else if (row.verification_status === 'rejected') rCount += Number(row.cnt);
+    if (counts.rows[0]) {
+      hcCount = Number(counts.rows[0].hidden);
+      wCount = Number(counts.rows[0].queue);
+      rpCount = Number(counts.rows[0].reprocess);
+      rCount = Number(counts.rows[0].rejected);
     }
     await pg.end();
   } catch {}
@@ -84,18 +90,37 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
         <h1 className="text-3xl font-bold text-gray-900">Discovery Feed</h1>
         <p className="mt-1 text-sm text-gray-500">
           {tab === 'hidden' ? 'Qualified opportunities — passed hard evidence gates' :
-           tab === 'queue' ? 'Items flagged for further investigation' :
-           'Rejected or routine — audit trail'}
+           tab === 'queue' ? 'Promising signals needing deeper investigation' :
+           tab === 'reprocess' ? 'Legacy pipeline items — pending v3 reanalysis' :
+           'Rejected or routine — not hidden catalysts'}
         </p>
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-1 mb-6 border-b border-gray-200">
+      <div className="flex gap-1 mb-6 border-b border-gray-200 flex-wrap">
         {[
-          { key: 'hidden', label: 'Hidden Opportunities', count: hcCount },
-          { key: 'queue', label: 'Research Queue', count: wCount },
-          { key: 'rejected', label: 'Rejected / Routine', count: rCount },
+          { key: 'hidden', label: 'Hidden Opportunities', count: hcCount, active: 'border-brand-600 text-brand-700 bg-brand-50/50' },
+          { key: 'queue', label: 'Research Queue', count: wCount, active: 'border-brand-600 text-brand-700 bg-brand-50/50' },
+          { key: 'reprocess', label: 'Needs Reprocessing', count: rpCount, active: 'border-amber-500 text-amber-700 bg-amber-50/50' },
+          { key: 'rejected', label: 'Rejected / Routine', count: rCount, active: 'border-red-500 text-red-700 bg-red-50/50' },
         ].map(t => (
+          <a
+            key={t.key}
+            href={`/feed?tab=${t.key}&sort=${sort}`}
+            className={`px-3 py-2 text-xs sm:text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
+              tab === t.key
+                ? t.active
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            {t.label}
+            <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 ${
+              tab === t.key ? 'bg-white/60' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {t.count}
+            </span>
+          </a>
+        ))}
           <a
             key={t.key}
             href={`/feed?tab=${t.key}&sort=${sort}`}
@@ -227,6 +252,17 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                     {opp.verificationConfidence != null && (
                       <span>· Conf: {Math.round((opp.verificationConfidence || 0) * 100)}%</span>
                     )}
+                    {((opp as any).engine_version) && (
+                      <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-medium ${
+                        (opp as any).engine_version === 'v3_investigation' ? 'bg-green-100 text-green-700' :
+                        (opp as any).engine_version === 'v1_legacy' ? 'bg-amber-100 text-amber-700' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {(opp as any).engine_version === 'v3_investigation' ? 'v3 research' :
+                         (opp as any).engine_version === 'v1_legacy' ? 'v1 legacy' :
+                         (opp as any).engine_version}
+                      </span>
+                    )}
                   </div>
                 </Link>
               );
@@ -234,7 +270,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
           )}
 
           <p className="text-center text-xs text-gray-400 pt-4">
-            Eligible universe: NYSE / NASDAQ &le; $10B market cap &middot; {opportunities.length} shown &middot; {totalPublished} published
+            Discovery funnel: {hcCount} qualified from {totalPublished} analyzed &middot; Eligible: NYSE/NASDAQ &le; $10B
           </p>
         </div>
       </div>
