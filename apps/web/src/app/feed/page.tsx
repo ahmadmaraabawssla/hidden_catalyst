@@ -161,17 +161,17 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
             filtered.map(opp => {
               const oppScore = pickScore(opp.scores, 'opportunity');
               const asymScore = pickScore(opp.scores, 'information_asymmetry');
-              const companyAttn = pickScore(opp.scores, 'company_attention');
-              const catalystAttn = pickScore(opp.scores, 'catalyst_attention');
               const evidenceScore = pickScore(opp.scores, 'evidence_quality');
+              const catalystScore = pickScore(opp.scores, 'catalyst_strength');
               const priceReactionScore = pickScore(opp.scores, 'price_reaction');
+              const timingScore = pickScore(opp.scores, 'timing');
 
               const facts = opp.claims.filter(c => c.claimType === 'verified_fact');
               const infs = opp.claims.filter(c => c.claimType === 'inference');
               const reasons = getOverlookedReasons(opp.risks);
               const realRisks = opp.risks.filter(r => !r.riskType.startsWith('overlooked_reason_'));
+              const analystInfo = analystBadge(asymScore);
               const mcBadge = marketCapBadge(opp.security.marketCap);
-              const hiddenAngle = opp.hiddenAngle as { claim?: string } | null;
 
               const scoreColor = oppScore >= 80 ? 'text-green-600' : oppScore >= 65 ? 'text-brand-700' : oppScore >= 50 ? 'text-amber-600' : 'text-gray-500';
 
@@ -181,67 +181,23 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                   href={`/opportunities/${opp.id}`}
                   className={`card block hover:shadow-md transition-all border-l-4 ${catalystBorder(opp.title)}`}
                 >
-                  {/* ── Top: Company + Price + Market Cap ── */}
-                  <div className="flex items-center justify-between gap-3 mb-2">
-                    <div className="flex items-center gap-2 flex-wrap min-w-0">
-                      <span className="text-sm font-semibold text-gray-900" title={opp.security.company.displayName}>
-                        {shortName(opp.security.company.displayName)}
-                      </span>
-                      <span className="text-xs text-gray-500 tabular-nums font-mono">{opp.security.ticker}</span>
-                      {opp.security.latestPrice && (
-                        <span className="text-xs text-gray-600 tabular-nums font-mono">${opp.security.latestPrice.toFixed(2)}</span>
-                      )}
-                      {opp.security.marketCap && (
-                        <span className="text-xs text-gray-500 tabular-nums">{formatMC(opp.security.marketCap)}</span>
-                      )}
-                      {mcBadge && (
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${mcBadge.color}`}>
-                          {mcBadge.label}
+                  {/* Top row: Company + Score */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-semibold text-gray-900" title={opp.security.company.displayName}>
+                          {shortName(opp.security.company.displayName)}
                         </span>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0 min-w-[48px]">
-                      <div className={`text-xl font-bold tabular-nums ${scoreColor}`}>{Math.round(oppScore)}</div>
-                      <div className="text-[10px] text-gray-400 uppercase tracking-wider">Score</div>
-                    </div>
-                  </div>
-
-                  {/* ── Hidden Angle (if available) ── */}
-                  {hiddenAngle?.claim && (
-                    <div className="mb-2 flex items-start gap-1.5">
-                      <span className="shrink-0 mt-0.5 text-brand-600 text-xs">🔍</span>
-                      <span className="text-xs text-brand-700 line-clamp-2">{hiddenAngle.claim}</span>
-                    </div>
-                  )}
-
-                  {/* ── Title ── */}
-                  <h3 className="text-sm font-semibold text-gray-900 line-clamp-2 leading-snug">{opp.title}</h3>
-
-                  {/* ── Score mini-pills ── */}
-                  <div className="mt-2 flex gap-1.5 flex-wrap">
-                    <ScorePill label="Hidden" value={asymScore} color="amber" />
-                    <ScorePill label="Evidence" value={evidenceScore} color="green" />
-                    <ScorePill label="Unpriced" value={priceReactionScore} color="teal" />
-                  </div>
-
-                  {/* ── First fact ── */}
-                  {facts.length > 0 && (
-                    <div className="mt-2 flex items-start gap-1.5">
-                      <span className="shrink-0 mt-0.5 inline-flex items-center rounded-full bg-green-100 px-1.5 py-0.5 text-[9px] font-medium text-green-700">Fact</span>
-                      <span className="text-xs text-gray-600 line-clamp-1">{facts[0].text}</span>
-                    </div>
-                  )}
-
-                  {/* ── Footer ── */}
-                  <div className="mt-2 flex items-center gap-2 text-[10px] text-gray-400 flex-wrap">
-                    <span>{opp._count.claims} claims</span>
-                    <span>{new Date(opp.detectedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                    {realRisks.slice(0, 2).map(r => (
-                      <span key={r.riskType} className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-medium ${
-                        r.severity === 'high' ? 'bg-red-100 text-red-700' : r.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'
-                      }`}>
-                        {r.riskType.replace(/_/g, ' ')}
-                      </span>
+                        <span className="text-xs text-gray-500 tabular-nums font-mono">
+                          {opp.security.ticker}
+                        </span>
+                        {mcBadge && (
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${mcBadge.color}`}>
+                            {mcBadge.label}
+                          </span>
+                        )}
+                        {opp.security.marketCap && (
+                          <span className="text-[11px] text-gray-500 tabular-nums">
                             {formatMC(opp.security.marketCap)}
                           </span>
                         )}
@@ -259,6 +215,61 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                     </div>
                   </div>
 
+                  {/* Score mini-bars */}
+                  <div className="mt-3 flex gap-2 flex-wrap">
+                    <ScorePill label="Asym" value={asymScore} color="amber" />
+                    <ScorePill label="Catalyst" value={catalystScore} color="blue" />
+                    <ScorePill label="Evidence" value={evidenceScore} color="green" />
+                    <ScorePill label="Timing" value={timingScore} color="purple" />
+                    <ScorePill label="Not Priced In" value={priceReactionScore} color="teal" />
+                  </div>
+
+                  {/* Claims */}
+                  <div className="mt-3 space-y-1.5">
+                    {facts.slice(0, 1).map((f, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">Fact</span>
+                        <span className="text-sm text-gray-700 line-clamp-2">{f.text}</span>
+                      </div>
+                    ))}
+                    {infs.slice(0, 1).map((inf, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5 inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-medium text-purple-700">Infer</span>
+                        <span className="text-sm text-gray-600 line-clamp-2">{inf.text}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Why overlooked */}
+                  {reasons.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-100">
+                      <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Why Overlooked</span>
+                      <ul className="mt-1 space-y-0.5">
+                        {reasons.slice(0, 2).map((r, i) => (
+                          <li key={i} className="text-xs text-gray-600 flex items-start gap-1.5">
+                            <span className="shrink-0 mt-0.5">{'\uD83D\uDCC9'}</span>
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Footer */}
+                  <div className="mt-3 flex items-center gap-3 text-xs text-gray-400 flex-wrap">
+                    <span>{'\uD83D\uDCC4'} {opp._count.claims} claim{opp._count.claims !== 1 ? 's' : ''}</span>
+                    <span>{new Date(opp.detectedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                    {opp.security.latestPrice && (
+                      <span className="tabular-nums">${opp.security.latestPrice.toFixed(2)}</span>
+                    )}
+                    {realRisks.slice(0, 2).map(r => (
+                      <span key={r.riskType} className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        r.severity === 'high' ? 'bg-red-100 text-red-700' : r.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {r.riskType.replace(/_/g, ' ')}
+                      </span>
+                    ))}
+                  </div>
                 </Link>
               );
             })
