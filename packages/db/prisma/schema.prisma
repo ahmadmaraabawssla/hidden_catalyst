@@ -58,6 +58,7 @@ model Security {
   avgDollarVolume Float?   @map("avg_dollar_volume")
   latestPrice     Float?   @map("latest_price")
   latestPriceDate DateTime? @map("latest_price_date")
+  attributes      Json     @default("{}")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

@@ -54,7 +54,10 @@ async function main() {
 
   console.log(`  Total: ${allProfiles.length} US stocks\n`);
 
-  // Index by symbol — skip caps clearly in foreign currency ( > $3T USD is impossible)
+  // Index by symbol. The screener's country filter is not enough to exclude
+  // foreign ordinary shares, whose market cap can be denominated in a local
+  // currency. Keep the existing upper-bound guard, but do not use it as a
+  // substitute for refreshing previously stored values.
   const bySymbol = new Map();
   for (const p of allProfiles) {
     // Sanity: market caps > $3T are in foreign currency (yen, rupees, etc.)
@@ -73,9 +76,7 @@ async function main() {
     FROM securities s
     WHERE s.active = true AND s.exchange IN ('NYSE','NASDAQ','NYSE American')
       AND s.ticker NOT LIKE '%.%'
-      AND (s.market_cap IS NULL OR s.market_cap < 10000)
       AND (s.attributes->>'mc_manual' IS NULL OR s.attributes->>'mc_manual' != 'true')
-    LIMIT 5000
   `);
 
   // Match securities against screener data, collect updates.
@@ -143,9 +144,9 @@ async function main() {
         const correctedMc = secResult.shares * u.price;
         await client.query(
           `UPDATE securities SET market_cap = $1, updated_at = NOW(),
-               attributes = COALESCE(attributes,'{}'::jsonb) || '{"mc_auto":true,"mc_source":"$2"}'::jsonb
+               attributes = COALESCE(attributes,'{}'::jsonb) || $2::jsonb
            WHERE id = $3`,
-          [correctedMc, secResult.source, u.id]
+          [correctedMc, JSON.stringify({ mc_auto: true, mc_source: secResult.source }), u.id]
         );
         console.log(`    ✓ ${u.ticker.padEnd(8)} auto‑resolved via ${secResult.source}: ${(secResult.shares/1e6).toFixed(1)}M shares → $${(correctedMc/1e9).toFixed(1)}B`);
         resolved++;
@@ -190,6 +191,8 @@ async function main() {
       avg_dollar_volume = CASE id `;
     for (const u of chunk) secSql += `WHEN '${u.id}' THEN ${u.volume} `;
     secSql += `END,
+      attributes = COALESCE(attributes, '{}'::jsonb)
+        || '{"mc_source":"fmp_company_screener","mc_review":false}'::jsonb,
       updated_at = NOW()
       WHERE id IN (${ids})`;
     await client.query(secSql);
@@ -203,13 +206,13 @@ async function main() {
       const hasIndustries = sectorUpdates.some(u => u.industry);
       if (hasSectors) {
         coSql += `sector = CASE id `;
-        for (const u of sectorUpdates) if (u.sector) coSql += `WHEN '${u.companyId}' THEN COALESCE(NULLIF('${u.sector.replace(/'/g, \"''\")}',''), sector) `;
+        for (const u of sectorUpdates) if (u.sector) coSql += `WHEN '${u.companyId}' THEN COALESCE(NULLIF('${u.sector.replace(/'/g, "''")}',''), sector) `;
         coSql += `ELSE sector END`;
         if (hasIndustries) coSql += `, `;
       }
       if (hasIndustries) {
         coSql += `industry = CASE id `;
-        for (const u of sectorUpdates) if (u.industry) coSql += `WHEN '${u.companyId}' THEN COALESCE(NULLIF('${u.industry.replace(/'/g, \"''\")}',''), industry) `;
+        for (const u of sectorUpdates) if (u.industry) coSql += `WHEN '${u.companyId}' THEN COALESCE(NULLIF('${u.industry.replace(/'/g, "''")}',''), industry) `;
         coSql += `ELSE industry END`;
       }
       coSql += ` WHERE id IN (${cids})`;

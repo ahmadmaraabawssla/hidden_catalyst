@@ -5,7 +5,11 @@ const path = require('path');
 const DB = process.env.DATABASE_URL;
 if (!DB) { console.error('DATABASE_URL required'); process.exit(1); }
 
-const FILES = ['docs/migration-fulltext-search.sql', 'docs/seed-relationships.sql'];
+const FILES = [
+  'docs/migration-security-attributes.sql',
+  'docs/migration-fulltext-search.sql',
+  'docs/seed-relationships.sql',
+];
 
 async function run() {
   const client = new Client({ connectionString: DB });
