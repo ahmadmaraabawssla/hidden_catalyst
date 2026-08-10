@@ -70,6 +70,24 @@ function extractFromS1Text(text) {
     .replace(/\s+/g, ' ')
     .trim();
 
+  // ── Pattern 0 (BEST): "Class A/B after this offering NNN shares" ──
+  // The S-1 filing explicitly states Class A and Class B post-offering totals.
+  // If both are found, sum them and return immediately.
+  var classAPostRe = /Class A[^.]*?after this offering[^.]*?(\d{1,3}(?:,\d{3}){1,3})\s+shares/gi;
+  var classBPostRe = /Class B[^.]*?after this offering[^.]*?(\d{1,3}(?:,\d{3}){1,3})\s+shares/gi;
+  var m0, classATotal = 0, classBTotal = 0;
+  while ((m0 = classAPostRe.exec(clean)) !== null) {
+    var a = parseInt(m0[1].replace(/,/g, ''), 10);
+    if (a > classATotal) classATotal = a;
+  }
+  while ((m0 = classBPostRe.exec(clean)) !== null) {
+    var b = parseInt(m0[1].replace(/,/g, ''), 10);
+    if (b > classBTotal) classBTotal = b;
+  }
+  if (classATotal > 1000000 && classBTotal > 1000000) {
+    return classATotal + classBTotal;
+  }
+
   var candidates = [];
 
   // Pattern A: "NNN,NNN,NNN shares of Class A/B/C Common"
@@ -155,9 +173,10 @@ async function downloadFiling(cik, acc) {
     return fullText
       .slice(textStart + 6)
       .replace(/<[^>]+>/g, ' ')
+      .replace(/&#[0-9]+;/gi, ' ')
+      .replace(/&[a-z]+;/gi, ' ')
       .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 60000);
+      .trim();
   } catch (e) {
     return null;
   }
@@ -206,7 +225,20 @@ async function resolveFromS1(cik) {
     var f = filings[i];
     var text = await downloadFiling(cik, f.acc);
     if (!text) continue;
-    var shares = extractFromS1Text(text);
+
+    // 2a: Try offering section (has clean post-offering share counts)
+    var offeringIdx = text.indexOf('THE OFFERING');
+    if (offeringIdx > 0) {
+      var offeringSection = text.slice(offeringIdx, offeringIdx + 5000);
+      var shares = extractFromS1Text(offeringSection);
+      if (shares) {
+        console.log('    [SEC S-1] ' + f.form + ' from ' + f.date + ' -> ' + (shares / 1e6).toFixed(1) + 'M shares (offering)');
+        return shares;
+      }
+    }
+
+    // 2b: Fallback to entire filing
+    shares = extractFromS1Text(text);
     if (shares) {
       console.log('    [SEC S-1] ' + f.form + ' from ' + f.date + ' -> ' + (shares / 1e6).toFixed(1) + 'M shares');
       return shares;
