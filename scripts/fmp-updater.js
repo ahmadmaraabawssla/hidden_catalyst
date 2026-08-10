@@ -233,7 +233,7 @@ async function main() {
     JOIN opportunities o ON o.security_id = s.id AND o.status = 'published'
     WHERE s.market_cap IS NOT NULL
       AND (s.attributes->>'mc_manual' IS NULL OR s.attributes->>'mc_manual' != 'true')
-      AND (s.attributes->>'mc_stale' IS NULL OR s.attributes->>'mc_stale' != 'true')
+      AND (s.attributes->>'mc_auto' IS NULL OR s.attributes->>'mc_auto' != 'true')
     LIMIT 30
   `);
 
@@ -255,16 +255,20 @@ async function main() {
     // Flag if screener shares differ from latest filed diluted shares by > 15%
     // AND the filing is more than 30 days old (corporate actions likely occurred since)
     if (diff > 0.15 && daysSinceFiling > 30) {
+      // Auto-correct: use diluted shares × current price
+      const correctedMc = diluted * price;
       await client.query(
-        `UPDATE securities SET attributes = COALESCE(attributes,'{}'::jsonb) || '{"mc_stale":true,"mc_stale_detail":"screener=${screenerShares.toLocaleString()}sh vs filed=${diluted.toLocaleString()}sh (${daysSinceFiling}d ago)"}'::jsonb
-         WHERE id = $1`, [sec.sec_id]
+        `UPDATE securities SET market_cap = $1, updated_at = NOW(),
+             attributes = COALESCE(attributes,'{}'::jsonb) || $2::jsonb
+         WHERE id = $3`,
+        [correctedMc, JSON.stringify({ mc_auto: true, mc_note: `post-corp-action ${daysSinceFiling}d ago, screener ${Math.round(screenerShares / 1e6)}M → diluted ${Math.round(diluted / 1e6)}M` }), sec.sec_id]
       );
-      console.log(`  ⚠ ${sec.ticker.padEnd(6)} stale: screener=${(screenerShares/1e6).toFixed(1)}M sh, filed=${(diluted/1e6).toFixed(1)}M sh (${daysSinceFiling}d ago)`);
+      console.log(`  ✏ ${sec.ticker.padEnd(6)} $${(sec.market_cap/1e9).toFixed(1)}B → $${(correctedMc/1e9).toFixed(1)}B (${Math.round(screenerShares/1e6)}M → ${Math.round(diluted/1e6)}M sh, ${daysSinceFiling}d since filing)`);
       staleFound++;
     }
     await SLEEP(250);
   }
-  console.log(`  ${staleFound} stale caps flagged\n`);
+  console.log(`  ${staleFound} stale caps auto-corrected\n`);
 
   // ═══ STEP 3: ENRICH PUBLISHED OPPORTUNITIES ═══
   console.log('═══ Step 3: Analyst + Institutional + Consensus + Peers ═══');
