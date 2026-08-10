@@ -60,10 +60,27 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
 
   if (!opp) notFound();
 
+  // Prisma client wasn't regenerated after schema update — query new fields directly
+  let hiddenAngle: any = null;
+  let verificationStatus: string | null = 'candidate';
+  try {
+    const { Client } = await import('pg');
+    const pgClient = new Client({ connectionString: process.env.DATABASE_URL });
+    await pgClient.connect();
+    const res = await pgClient.query(
+      `SELECT hidden_angle, verification_status FROM opportunities WHERE id = $1`,
+      [params.id]
+    );
+    if (res.rows[0]) {
+      hiddenAngle = res.rows[0].hidden_angle || null;
+      verificationStatus = res.rows[0].verification_status || 'candidate';
+    }
+    await pgClient.end();
+  } catch {}
+
   const scores = Object.fromEntries(opp.scores.map(s => [s.scoreType, s.value]));
   const facts = opp.claims.filter(c => c.claimType === 'verified_fact');
   const inferences = opp.claims.filter(c => c.claimType === 'inference');
-  const hiddenAngle = opp.hiddenAngle as any | null;
   const contradictions = opp.risks.filter(r => r.riskType === 'contradiction');
   const realRisks = opp.risks.filter(r => !r.riskType.startsWith('overlooked_reason_') && r.riskType !== 'contradiction');
   const overlookedReasons = opp.risks.filter(r => r.riskType.startsWith('overlooked_reason_'));
@@ -78,7 +95,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
     historicalSummary = formatHistoricalSummary(hist);
   } catch {}
 
-  const vs = verStatusLabel(opp.verificationStatus);
+  const vs = verStatusLabel(verificationStatus);
 
   return (
     <div className="page-container">
