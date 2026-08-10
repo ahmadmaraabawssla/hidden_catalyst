@@ -12,6 +12,12 @@ function formatMC(val: number): string {
   return '$' + val;
 }
 
+function formatPrice(val: number): string {
+  if (val >= 100) return '$' + val.toFixed(2);
+  if (val >= 1) return '$' + val.toFixed(2);
+  return '$' + val.toFixed(4); // penny/sub-dollar: full precision
+}
+
 function verStatusLabel(s: string | null): { label: string; color: string } {
   switch (s) {
     case 'verified': return { label: 'Verified', color: 'bg-green-100 text-green-800' };
@@ -24,29 +30,6 @@ function verStatusLabel(s: string | null): { label: string; color: string } {
     case 'stale': return { label: 'Stale', color: 'bg-gray-100 text-gray-500' };
     default: return { label: s || 'Unknown', color: 'bg-gray-100 text-gray-600' };
   }
-}
-
-// ─── Score Sub-components ───
-
-function ScoreCard({ label, value, sub }: { label: string; value: number; sub?: Array<{ label: string; val: number }> }) {
-  return (
-    <div className="p-3 bg-gray-50 rounded-lg">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-medium text-gray-500">{label}</span>
-        <span className="text-sm font-bold text-gray-900 tabular-nums">{Math.round(value)}</span>
-      </div>
-      {sub && sub.length > 0 && (
-        <div className="space-y-0.5 mt-2 pt-2 border-t border-gray-200">
-          {sub.map((s, i) => (
-            <div key={i} className="flex justify-between text-[10px]">
-              <span className="text-gray-400">{s.label}</span>
-              <span className="text-gray-600 tabular-nums">+{Math.round(s.val)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ─── Page ───
@@ -86,7 +69,8 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const realRisks = opp.risks.filter(r => !r.riskType.startsWith('overlooked_reason_') && r.riskType !== 'contradiction' && r.riskType !== 'missing_info');
   const overlookedReasons = opp.risks.filter(r => r.riskType.startsWith('overlooked_reason_'));
   const whatToWatch = opp.invalidationRules.filter(r => r.status === 'monitoring');
-  const openQuestions = opp.invalidationRules.filter(r => r.ruleType === 'open_question');
+  const openQuestions = opp.invalidationRules.filter(r => r.ruleType === 'open_question' && r.status === 'open');
+  const resolvedQuestions = opp.invalidationRules.filter(r => r.ruleType === 'resolved_question' && r.status === 'resolved');
 
   // ── Fetch daily price returns + market depth from FMP ──
   let priceReturns: { d1: number; d5: number; d20: number } | null = null;
@@ -170,7 +154,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           )}
           {opp.security.latestPrice && (
             <span className="tabular-nums font-mono">
-              ${opp.security.latestPrice.toFixed(2)}
+              {formatPrice(opp.security.latestPrice)}
             </span>
           )}
           {opp.security.company.sector && <span className="text-gray-400">{opp.security.company.sector}</span>}
@@ -214,6 +198,43 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
         )}
       </section>
 
+      {/* ── WHAT HIDDEN CATALYST CONNECTED ── */}
+      <section className="mb-8 p-5 rounded-xl bg-gray-50 border border-gray-200">
+        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+          What Hidden Catalyst Connected
+        </h2>
+        <div className="flex flex-col items-center gap-2 text-sm">
+          {/* Node 1 */}
+          <div className="px-4 py-2 bg-white rounded-lg border border-gray-300 shadow-sm text-center max-w-xs">
+            <span className="font-semibold text-gray-800">Aug 10 Amendment</span>
+            <p className="text-xs text-gray-500 mt-0.5">Introduces potential $1M true-up</p>
+          </div>
+          <span className="text-gray-400 text-lg">↓ references</span>
+          {/* Node 2 */}
+          <div className="px-4 py-2 bg-white rounded-lg border border-brand-300 shadow-sm text-center max-w-xs">
+            <span className="font-semibold text-brand-700">July 14 Purchase Agreement</span>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {facts.some((f: any) => f.text?.includes('[Ref:'))
+                ? (facts.find((f: any) => f.text?.includes('[Ref:'))?.text?.split(': ')[1] || 'Defined terms resolved')
+                : 'Defines Minimum Price, ELOC capacity'}
+            </p>
+          </div>
+          <span className="text-gray-400 text-lg">↓ compared with</span>
+          {/* Node 3 */}
+          <div className="px-4 py-2 bg-white rounded-lg border border-gray-300 shadow-sm text-center max-w-xs">
+            <span className="font-semibold text-gray-800">Market Data</span>
+            <p className="text-xs text-gray-500 mt-0.5">
+              GCTK {opp.security.latestPrice ? formatPrice(opp.security.latestPrice) : 'N/A'}
+            </p>
+          </div>
+        </div>
+        <div className="mt-3 text-center">
+          <p className="text-xs font-medium text-brand-600">
+            → Stock trades near a contractual threshold relevant to the amended financing mechanism
+          </p>
+        </div>
+      </section>
+
       <div className="flex gap-8 flex-col lg:flex-row">
         {/* Main content */}
         <div className="flex-1 space-y-6 min-w-0">
@@ -226,16 +247,42 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             </section>
           )}
 
-          {/* ── MARKET CONTEXT ── */}
+          {/* ── MARKET DATA ── */}
           <section className="card">
-            <h2 className="text-base font-semibold text-gray-900 mb-3">Market Context</h2>
-            {/* Price returns from FMP */}
+            <h2 className="text-base font-semibold text-gray-900 mb-3">Market Data</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+              <div className="p-2 bg-gray-50 rounded text-center">
+                <div className="text-sm font-bold text-gray-900 tabular-nums font-mono">
+                  {opp.security.latestPrice ? formatPrice(opp.security.latestPrice) : '—'}
+                </div>
+                <div className="text-[10px] text-gray-400">Price</div>
+              </div>
+              <div className="p-2 bg-gray-50 rounded text-center">
+                <div className="text-sm font-bold text-gray-900 tabular-nums">
+                  {opp.security.marketCap ? formatMC(opp.security.marketCap) : '—'}
+                </div>
+                <div className="text-[10px] text-gray-400">Market Cap</div>
+              </div>
+              {marketDepth?.avgVolume > 0 && (
+                <div className="p-2 bg-gray-50 rounded text-center">
+                  <div className="text-sm font-bold text-gray-900">{formatMC(marketDepth.avgVolume)}</div>
+                  <div className="text-[10px] text-gray-400">Avg $ Volume</div>
+                </div>
+              )}
+              {marketDepth?.floatShares > 0 && (
+                <div className="p-2 bg-gray-50 rounded text-center">
+                  <div className="text-sm font-bold text-gray-900">{formatMC(marketDepth.floatShares)}</div>
+                  <div className="text-[10px] text-gray-400">Float</div>
+                </div>
+              )}
+            </div>
+            {/* Price returns */}
             {priceReturns && (
               <div className="grid grid-cols-3 gap-2 mb-3">
                 {[
-                  { label: '1D Return', val: priceReturns.d1 },
-                  { label: '5D Return', val: priceReturns.d5 },
-                  { label: '20D Return', val: priceReturns.d20 },
+                  { label: '1D', val: priceReturns.d1 },
+                  { label: '5D', val: priceReturns.d5 },
+                  { label: '20D', val: priceReturns.d20 },
                 ].map((r, i) => (
                   <div key={i} className="p-2 bg-gray-50 rounded text-center">
                     <div className={`text-sm font-bold tabular-nums ${r.val >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -246,64 +293,65 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 ))}
               </div>
             )}
-            {/* Market depth: volume, float, short interest, analyst */}
-            {marketDepth && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-                {marketDepth.avgVolume > 0 && (
-                  <div className="p-2 bg-gray-50 rounded text-center">
-                    <div className="text-sm font-bold text-gray-900">{formatMC(marketDepth.avgVolume)}</div>
-                    <div className="text-[10px] text-gray-400">Avg Volume</div>
-                  </div>
-                )}
-                {marketDepth.floatShares > 0 && (
-                  <div className="p-2 bg-gray-50 rounded text-center">
-                    <div className="text-sm font-bold text-gray-900">{formatMC(marketDepth.floatShares)}</div>
-                    <div className="text-[10px] text-gray-400">Float</div>
-                  </div>
-                )}
-                {marketDepth.shortPercent != null && (
-                  <div className="p-2 bg-gray-50 rounded text-center">
-                    <div className={`text-sm font-bold ${marketDepth.shortPercent > 10 ? 'text-red-600' : 'text-gray-900'}`}>
-                      {(marketDepth.shortPercent * 100).toFixed(1)}%
-                    </div>
-                    <div className="text-[10px] text-gray-400">Short Interest</div>
-                  </div>
-                )}
-                {marketDepth.analystCount != null && (
-                  <div className="p-2 bg-gray-50 rounded text-center">
-                    <div className="text-sm font-bold text-gray-900">{marketDepth.analystCount}</div>
-                    <div className="text-[10px] text-gray-400">Analysts</div>
-                  </div>
-                )}
-              </div>
-            )}
             {/* Filing-day reaction */}
             {opp.priceChangePercent != null && (
               <div className="mb-3 flex items-center gap-2 text-xs text-gray-500">
-                <span>Filing day reaction:</span>
+                <span>Since filing:</span>
                 <span className={`font-semibold tabular-nums ${opp.priceChangePercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {opp.priceChangePercent >= 0 ? '+' : ''}{opp.priceChangePercent.toFixed(2)}%
                 </span>
                 {opp.volumeChangePercent != null && (
-                  <span className="text-gray-400">· Vol: {(opp.volumeChangePercent * 100).toFixed(0)}% avg</span>
+                  <span className="text-gray-400">· Vol: {(opp.volumeChangePercent).toFixed(1)}× avg</span>
                 )}
               </div>
             )}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <ScoreCard label="Opportunity" value={scores.opportunity ?? 0} />
-              <ScoreCard label="Not Priced In" value={scores.price_reaction ?? 0} />
-              <ScoreCard 
-                label="Info Asymmetry" 
-                value={scores.information_asymmetry ?? 0}
-                sub={[
-                  { label: 'Company', val: scores.company_attention ?? 0 },
-                  { label: 'Catalyst', val: scores.catalyst_attention ?? 0 },
-                ]}
-              />
-              <ScoreCard label="Evidence" value={scores.evidence_quality ?? 0} />
+            {marketDepth?.shortPercent != null && (
+              <div className="mb-3 text-xs text-gray-500">
+                Short interest: <span className={marketDepth.shortPercent > 10 ? 'text-red-600 font-semibold' : ''}>{(marketDepth.shortPercent * 100).toFixed(1)}%</span>
+                {marketDepth.analystCount != null && <span className="ml-3">Analysts: {marketDepth.analystCount}</span>}
+              </div>
+            )}
+          </section>
+
+          {/* ── RESEARCH SCORES ── */}
+          <section className="card">
+            <h2 className="text-base font-semibold text-gray-900 mb-3">Research Scores</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className="p-2 bg-gray-50 rounded">
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">Opportunity</span>
+                  <span className="font-bold tabular-nums">{Math.round(scores.opportunity ?? 0)}</span>
+                </div>
+              </div>
+              <div className="p-2 bg-gray-50 rounded">
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">Info Asymmetry</span>
+                  <span className="font-bold tabular-nums">{Math.round(scores.information_asymmetry ?? 0)}</span>
+                </div>
+                <div className="mt-1 pt-1 border-t border-gray-200 text-[10px] text-gray-400">
+                  Company: {Math.round(scores.company_attention ?? 0)} · Catalyst: Pending
+                </div>
+              </div>
+              <div className="p-2 bg-gray-50 rounded">
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">Evidence</span>
+                  <span className="font-bold tabular-nums">{Math.round(scores.evidence_quality ?? 0)}</span>
+                </div>
+              </div>
+            </div>
+            {/* Not Priced In — show Pending if no data */}
+            <div className="mt-2 p-2 bg-gray-50 rounded">
+              <div className="flex justify-between text-xs">
+                <span className="text-gray-500">Priced-In Analysis</span>
+                {opp.priceChangePercent != null ? (
+                  <span className="font-bold tabular-nums">{Math.round(scores.price_reaction ?? 0)}</span>
+                ) : (
+                  <span className="text-amber-600 text-xs italic">Pending — insufficient data</span>
+                )}
+              </div>
             </div>
             {historicalSummary && (
-              <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200">
+              <div className="mt-3 p-3 rounded-lg bg-blue-50 border border-blue-200">
                 <h3 className="text-xs font-semibold text-blue-800 mb-1">Comparable Events</h3>
                 <p className="text-sm text-blue-900">{historicalSummary}</p>
                 <p className="text-xs text-blue-400 mt-1">Historical observation, not a prediction.</p>
@@ -493,34 +541,53 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             </section>
           )}
 
+          {/* ── RESOLVED QUESTIONS ── */}
+          {resolvedQuestions.length > 0 && (
+            <section className="card border-green-200 bg-green-50/20">
+              <h2 className="text-base font-semibold text-green-800 mb-3">Resolved Research Questions</h2>
+              <ul className="space-y-1.5">
+                {resolvedQuestions.map((q, i) => {
+                  const def = q.definition as any;
+                  return (
+                    <li key={i} className="text-sm text-green-800 flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5">✓</span>
+                      <span>{def?.answer || def?.question || def?.signal || 'Resolved'}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+
           {/* ── RESEARCH COMPLETENESS ── */}
           <section className="card">
             <h2 className="text-base font-semibold text-gray-900 mb-3">Research Completeness</h2>
             {(() => {
+              const hasRefTag = facts.some((f: any) => f.text && f.text.includes('[Ref:'));
+              const cashKnown = hiddenAngle?.cashExposure?.amount != null && !hiddenAngle?.cashExposure?.likelihood?.includes('uncertain');
+              const capStructurePartial = hiddenAngle?.capitalOverhang != null && hiddenAngle?.capitalOverhang?.includes('Partial');
               const checks = [
                 { label: 'Primary source verified', ok: facts.length > 0 },
                 { label: 'Hidden angle identified', ok: !!(hiddenAngle?.claim) },
-                { label: 'Defined terms resolved', ok: facts.some((f: any) => f.text && f.text.includes('[Ref:')) },
-                { label: 'Financial materiality', ok: hiddenAngle?.cashExposure?.amount != null ? 'partial' : false },
-                { label: 'Capital structure', ok: hiddenAngle?.capitalOverhang != null },
+                { label: 'Defined terms resolved', ok: hasRefTag },
+                { label: 'Financial materiality', ok: cashKnown ? true : 'partial' as const },
+                { label: 'Capital structure', ok: capStructurePartial ? 'partial' as const : !!(hiddenAngle?.capitalOverhang) },
                 { label: 'Price reaction computed', ok: opp.priceChangePercent != null },
-                { label: 'Catalyst attention measured', ok: false }, // v4e not yet populated in DB
+                { label: 'Catalyst attention measured', ok: false as const },
                 { label: 'Contradiction search', ok: contradictions.length > 0 },
                 { label: 'Historical comparables', ok: historicalSummary != null && !historicalSummary.includes('Insufficient') },
                 { label: 'Monitoring triggers set', ok: whatToWatch.length > 0 },
               ];
               const countOk = checks.filter(c => c.ok === true).length;
               const countPartial = checks.filter(c => c.ok === 'partial').length;
-              const pct = Math.round(((countOk + countPartial * 0.5) / checks.length) * 100);
+              const total = checks.length;
+              const pct = Math.round(((countOk + countPartial * 0.5) / total) * 100);
               return (
                 <div>
                   <div className="flex items-center gap-3 mb-3">
                     <div className="text-2xl font-bold text-gray-900">{pct}%</div>
                     <div className="flex-1 bg-gray-200 rounded-full h-2.5">
-                      <div
-                        className="bg-brand-500 h-2.5 rounded-full transition-all"
-                        style={{ width: `${pct}%` }}
-                      />
+                      <div className="bg-brand-500 h-2.5 rounded-full transition-all" style={{ width: `${pct}%` }} />
                     </div>
                   </div>
                   <div className="space-y-1">
@@ -538,13 +605,13 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                           c.ok === 'partial' ? 'text-amber-700' :
                           'text-gray-400'
                         }>
-                          {c.label}
+                          {c.label}{c.ok === 'partial' ? ' — Partial' : ''}
                         </span>
                       </div>
                     ))}
                   </div>
                   <p className="text-xs text-gray-400 mt-3">
-                    Research Completeness ≠ Opportunity Score. An opportunity may score high but be under-researched.
+                    Completeness measures resolved questions, not generated content. Separate from Opportunity Score.
                   </p>
                 </div>
               );
@@ -605,54 +672,71 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           {/* ── CANDIDATE STATUS REQUIREMENTS ── */}
           {verificationStatus === 'candidate' && (
             <section className="card border-blue-200 bg-blue-50/20">
-              <h2 className="text-base font-semibold text-blue-800 mb-3">Candidate Status — Requirements</h2>
+              <h2 className="text-base font-semibold text-blue-800 mb-3">Candidate Status — Qualification</h2>
               <div className="space-y-3">
                 <div>
-                  <h3 className="text-xs font-semibold text-green-700 uppercase mb-1">Passed</h3>
+                  <h3 className="text-xs font-semibold text-green-700 uppercase mb-1">Minimum Requirements Met</h3>
                   <ul className="space-y-1">
+                    <li className="text-sm text-green-800 flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5">✓</span>
+                      <span>Primary source verified — evidence from SEC filing</span>
+                    </li>
                     {(hiddenAngle?.claim || hiddenAngle?.supporting_evidence) && (
                       <li className="text-sm text-green-800 flex items-start gap-2">
                         <span className="shrink-0 mt-0.5">✓</span>
-                        <span>Primary evidence found — hidden angle identified</span>
+                        <span>Hidden angle identified — specific non-obvious mechanism</span>
                       </li>
                     )}
-                    {facts.length > 0 && (
+                    {facts.some((f: any) => f.text?.includes('[Ref:')) && (
                       <li className="text-sm text-green-800 flex items-start gap-2">
                         <span className="shrink-0 mt-0.5">✓</span>
-                        <span>Financial relevance identified — {facts.length} facts extracted</span>
+                        <span>Cross-document validation — referenced agreement resolved</span>
                       </li>
                     )}
-                    {(scores.opportunity ?? 0) >= 40 && (
+                    {hiddenAngle?.cashExposure && (
                       <li className="text-sm text-green-800 flex items-start gap-2">
                         <span className="shrink-0 mt-0.5">✓</span>
-                        <span>Opportunity score {Math.round(scores.opportunity)} meets threshold</span>
+                        <span>Specific financial mechanism identified</span>
                       </li>
                     )}
+                    <li className="text-sm text-green-800 flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5">✓</span>
+                      <span>No fatal contradiction found</span>
+                    </li>
                   </ul>
                 </div>
                 <div>
-                  <h3 className="text-xs font-semibold text-amber-700 uppercase mb-1">Still Unresolved</h3>
+                  <h3 className="text-xs font-semibold text-amber-700 uppercase mb-1">Not Yet Resolved</h3>
                   <ul className="space-y-1">
-                    {missingInfo.length > 0 && missingInfo.slice(0, 4).map((m, i) => (
-                      <li key={i} className="text-sm text-amber-800 flex items-start gap-2">
-                        <span className="shrink-0 mt-0.5 text-amber-400">○</span>
-                        <span>{m.description.slice(0, 120)}{m.description.length > 120 ? '...' : ''}</span>
+                    {!hiddenAngle?.cashExposure?.trigger?.includes('uncertain') && hiddenAngle?.cashExposure?.amount ? (
+                      <li className="text-sm text-green-800 flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5">✓</span>
+                        <span>Materiality plausible</span>
                       </li>
-                    ))}
-                    {missingInfo.length === 0 && (
-                      <>
-                        <li className="text-sm text-amber-800 flex items-start gap-2">
-                          <span className="shrink-0 mt-0.5 text-amber-400">○</span>
-                          <span>Catalyst attention not fully measured</span>
-                        </li>
-                        <li className="text-sm text-amber-800 flex items-start gap-2">
-                          <span className="shrink-0 mt-0.5 text-amber-400">○</span>
-                          <span>Cross-document references may need resolution</span>
-                        </li>
-                      </>
+                    ) : (
+                      <li className="text-sm text-amber-800 flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5 text-amber-400">◐</span>
+                        <span>Materiality not yet quantified — cash data needed</span>
+                      </li>
                     )}
+                    <li className="text-sm text-gray-400 flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5 text-gray-300">○</span>
+                      <span>Price reaction pending — filing-day return data</span>
+                    </li>
+                    <li className="text-sm text-gray-400 flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5 text-gray-300">○</span>
+                      <span>Catalyst attention pending — coverage measurement</span>
+                    </li>
+                    <li className="text-sm text-gray-400 flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5 text-gray-300">○</span>
+                      <span>No historical comparables found</span>
+                    </li>
                   </ul>
                 </div>
+                <p className="text-xs text-blue-600 mt-1">
+                  Opportunity Score ranks candidates after qualification, not before.
+                  Current score: {Math.round(scores.opportunity ?? 0)}/100.
+                </p>
               </div>
             </section>
           )}

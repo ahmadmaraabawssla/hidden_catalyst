@@ -168,7 +168,8 @@ async function main() {
   console.log(`  Minimum Price: $${minPrice ? minPrice.toFixed(5) : 'NOT RESOLVED'}`);
   if (distanceFromThreshold !== null) {
     console.log(`  Distance from threshold: ${distanceFromThreshold >= 0 ? '+' : ''}${distanceFromThreshold.toFixed(2)}%`);
-    console.log(`  STATUS: ${distanceFromThreshold < 5 ? '⚠ CLOSE TO THRESHOLD' : distanceFromThreshold < 15 ? '⚡ NEAR THRESHOLD' : '✓ Above threshold'}`);
+    console.log(`  NOTE: Minimum Price is the contractual threshold, but the actual trigger is the Commitment Fee Price falling below it — NOT the stock price directly.`);
+    console.log(`  STATUS: ${distanceFromThreshold < 3 ? '⚠ VERY CLOSE TO THRESHOLD' : distanceFromThreshold < 10 ? '⚡ NEAR THRESHOLD' : '✓ Above threshold'}`);
   }
 
   // ── Step 7: Financial materiality ──
@@ -218,25 +219,25 @@ async function main() {
   // ── Step 8: Build the resolved hidden angle ──
   console.log('\nStep 8: Building resolved hidden angle...');
   const thresholdProximity = distanceFromThreshold !== null
-    ? `The underlying Purchase Agreement sets the Minimum Price at $${minPrice.toFixed(5)}. GCTK currently trades at $${currentPrice.toFixed(2)}, just ${distanceFromThreshold.toFixed(1)}% ${distanceFromThreshold >= 0 ? 'above' : 'BELOW'} this contractual threshold.`
-    : 'The Minimum Price threshold is defined in the July 14 Purchase Agreement. Current price: $' + currentPrice.toFixed(2) + '.';
+    ? `The underlying Purchase Agreement sets the Minimum Price at $${minPrice.toFixed(5)}. GCTK currently trades at $${currentPrice.toFixed(4)} (${distanceFromThreshold.toFixed(2)}% ${distanceFromThreshold >= 0 ? 'above' : 'below'} the threshold). IMPORTANT: The actual trigger is the Commitment Fee Price falling below the Minimum Price — the stock price is an imperfect proxy. The Commitment Fee Price is determined by a separate contractual measurement formula (date and methodology still under review).`
+    : 'The Minimum Price threshold is defined in the July 14 Purchase Agreement. Current price: $' + currentPrice.toFixed(4) + '. The actual trigger is the Commitment Fee Price.';
 
   const hiddenAngle = {
-    claim: `GCTK's White Lion amendment adds a potential $1M cash true-up tied to a contractual price mechanism. The underlying Purchase Agreement (July 14, 2026) defines the Minimum Price at $${minPrice ? minPrice.toFixed(5) : 'TBD'}, placing that threshold ${distanceFromThreshold !== null ? (distanceFromThreshold < 5 ? 'very close to' : 'near') : 'near'} the stock's current ~$${currentPrice.toFixed(2)} price.`,
+    claim: `GCTK's White Lion amendment adds a potential $1M cash true-up tied to a Commitment Fee Price mechanism. The underlying Purchase Agreement (July 14, 2026) sets a $${minPrice ? minPrice.toFixed(5) : 'TBD'} Minimum Price. GCTK trades at $${currentPrice.toFixed(4)} (${distanceFromThreshold ? distanceFromThreshold.toFixed(1) + '% from' : 'near'} the contractual threshold). The Commitment Fee Price — the actual trigger — is determined by a separate measurement mechanic, not the spot price.`,
     supporting_evidence: minPrice
-      ? `"exceeds $0.39912 (the 'Minimum Price')" — from the July 14 Purchase Agreement (EX-10.4). Current price: $${currentPrice.toFixed(2)}.`
-      : `"the Nasdaq Minimum Price (as defined in the Purchase Agreement)" — from the Aug 10 amendment. Current price: $${currentPrice.toFixed(2)}.`,
-    reasoning: thresholdProximity + ' The significance of the $1M true-up depends on post-July transaction liquidity and the Commitment Fee Price measurement mechanics. The broader White Lion facility involves an equity line, warrant mechanics, and potential share issuance — this $1M clause is one component of a more complex financing structure.',
-    confidence: minPrice ? 0.82 : 0.65,
+      ? `"exceeds $0.39912 (the 'Minimum Price')" — from the July 14 Purchase Agreement. Current price: $${currentPrice.toFixed(4)}. Note: trigger is Commitment Fee Price < Minimum Price, not stock price.`
+      : `"the Nasdaq Minimum Price (as defined in the Purchase Agreement)" — from the Aug 10 amendment.`,
+    reasoning: thresholdProximity + ' The $1M true-up significance depends on post-July transaction liquidity and the Commitment Fee Price measurement date/mechanics. The broader White Lion facility (up to $50M equity line, 3-year term) means this $1M clause is one component of a larger financing structure.',
+    confidence: minPrice ? 0.78 : 0.60,
     cashExposure: {
       amount: '$1,000,000',
-      trigger: 'True-Up Amount triggered if Commitment Fee Price < Minimum Price ($' + (minPrice || 'TBD') + ')',
-      likelihood: distanceFromThreshold !== null && distanceFromThreshold < 5 ? 'medium' : 'low',
+      trigger: 'True-Up Amount triggered if Commitment Fee Price < Minimum Price ($0.39912). Commitment Fee Price is a contractual calculation, not the spot price.',
+      likelihood: 'uncertain — depends on Commitment Fee Price measurement mechanics',
     },
     dilutionExposure: resolvedTerms['eloc_capacity']
-      ? { potentialShares: 'Unknown', pctOfOutstanding: 'Unknown', terms: `Equity line up to $${(resolvedTerms.eloc_capacity / 1e6).toFixed(0)}M with White Lion Capital` }
+      ? { potentialShares: 'Unknown', pctOfOutstanding: 'Unknown', terms: `Equity line up to $${(resolvedTerms.eloc_capacity / 1e6).toFixed(0)}M with White Lion Capital (3-year facility, subject to conditions)` }
       : null,
-    capitalOverhang: 'GCTK recently completed a major transaction. The White Lion agreement involves warrants, commitment mechanics, and potential share issuance. Full capital structure reconciliation needed.',
+    capitalOverhang: 'Partial — GCTK completed a major transaction in July 2026. White Lion agreement includes warrants, commitment mechanics, and share issuance. Fully diluted share count not yet reconciled.',
   };
 
   console.log(`  Hidden Angle: ${hiddenAngle.claim.slice(0, 120)}...`);
@@ -245,15 +246,15 @@ async function main() {
   console.log('\nStep 9: Updating GCTK opportunity...');
 
   const newTitle = minPrice
-    ? `GCTK: White Lion amendment adds $1M true-up — Minimum Price at $${minPrice.toFixed(5)}, stock at $${currentPrice.toFixed(2)} (${distanceFromThreshold >= 0 ? '+' : ''}${distanceFromThreshold.toFixed(1)}%)`
+    ? `GCTK: White Lion amendment adds $1M true-up — trades near $${minPrice.toFixed(5)} Minimum Price (Commitment Fee Price trigger pending)`
     : `GCTK: White Lion amendment adds $1M true-up — Minimum Price defined in July 14 Purchase Agreement`;
 
   const whyItMatters = [
-    `The White Lion amendment creates a potential $1M cash obligation triggered if the Commitment Fee Price falls below the contractual Minimum Price.`,
+    `The White Lion amendment creates a potential $1M cash obligation triggered if the contractual Commitment Fee Price falls below the $${minPrice ? minPrice.toFixed(5) : 'TBD'} Minimum Price.`,
     minPrice
-      ? `The Minimum Price of $${minPrice.toFixed(5)} is ${distanceFromThreshold.toFixed(1)}% ${distanceFromThreshold >= 0 ? 'above' : 'BELOW'} GCTK's current $${currentPrice.toFixed(2)} price.`
-      : `The Minimum Price is defined in the July 14 Purchase Agreement — cross-document resolution is needed to calculate the proximity.`,
-    `Because GCTK is a micro-cap with a recently transformed capital structure, this obligation could be meaningful relative to available liquidity. Full cap table reconciliation pending.`,
+      ? `GCTK currently trades at $${currentPrice.toFixed(4)}, approximately ${distanceFromThreshold.toFixed(1)}% above the Minimum Price threshold. The Commitment Fee Price — not the spot price — is the actual trigger.`
+      : `The actual trigger is the Commitment Fee Price measurement, not the stock price directly.`,
+    `Because GCTK is a micro-cap with a recently transformed capital structure, this obligation could be meaningful relative to available liquidity. Full cap table reconciliation and measurement-date resolution pending.`,
   ].join(' ');
 
   // Update the opportunity
@@ -274,8 +275,9 @@ async function main() {
     `Maximum True-Up Amount: $1,000,000 (from Aug 10 amendment)`,
     `True-Up Formula: $1,000,000 minus Effective Amount if Commitment Fee Price < Minimum Price`,
     `[Ref: July 14 Purchase Agreement] Minimum Price: $${minPrice ? minPrice.toFixed(5) : 'defined in referenced agreement'}`,
-    `Current stock price: $${currentPrice.toFixed(2)} (market data)`,
-    `Distance from Minimum Price: ${distanceFromThreshold !== null ? distanceFromThreshold.toFixed(1) + '%' : 'pending resolution'}`,
+    `Current stock price: $${currentPrice.toFixed(4)} (market data)`,
+    `Distance from Minimum Price: ${distanceFromThreshold !== null ? distanceFromThreshold.toFixed(2) + '% above threshold' : 'pending resolution'}`,
+    `[Ref: July 14 Purchase Agreement] White Lion ELOC capacity: up to $50,000,000 (3-year facility)`,
     `Counterparty: White Lion Capital`,
     `Filed as 8-K amendment on August 10, 2026`,
   ];
@@ -288,13 +290,14 @@ async function main() {
     );
   }
 
-  // Delete old contradictions and insert new ones
+  // Delete old contradictions and insert only actual contradictions (not research gaps)
   await pg.query(`DELETE FROM risks WHERE opportunity_id = $1 AND risk_type = 'contradiction'`, [OPP_ID]);
 
   const newContradictions = [
-    'The True-Up Amount is conditional on the Commitment Fee Price falling below the Minimum Price — the payment is not guaranteed.',
-    'The exact Commitment Fee Price measurement mechanics and timing are not yet fully resolved.',
-    'Post-July transaction liquidity may have changed significantly — current cash position needs confirmation.',
+    'The True-Up Amount is conditional — payment only occurs if the contractual Commitment Fee Price falls below the Minimum Price. The Commitment Fee Price is not the same as the spot stock price.',
+    'Current stock price proximity to Minimum Price does not directly determine true-up liability. The Commitment Fee Price is calculated through a separate contractual mechanic.',
+    'The $1M represents a maximum potential payment, not necessarily the expected amount. The Effective Amount calculation may reduce the actual exposure.',
+    'Access to other financing (including the $50M White Lion facility itself) could reduce the economic significance of a $1M cash payment.',
   ];
 
   for (let i = 0; i < newContradictions.length; i++) {
@@ -309,12 +312,13 @@ async function main() {
   await pg.query(`DELETE FROM risks WHERE opportunity_id = $1 AND risk_type = 'missing_info'`, [OPP_ID]);
 
   const missingInfo = [
-    'Current post-transaction unrestricted cash balance',
-    'Commitment Fee Price measurement date and mechanics',
-    'Fully diluted share count after July transaction and bridge financing',
+    'Current post-transaction unrestricted cash balance (key for materiality)',
+    'Commitment Fee Price measurement date and contractual formula',
+    'Fully diluted share count after July 2026 transaction and bridge financing',
     'Total White Lion facility usage to date',
-    'Warrant terms and exercise conditions',
+    'Warrant terms, exercise conditions, and potential dilution',
     'Registration statement effectiveness status',
+    'Commitment Fee Price determination mechanics — the actual trigger, not the stock-price proxy',
   ];
 
   for (let i = 0; i < missingInfo.length; i++) {
@@ -329,12 +333,12 @@ async function main() {
   await pg.query(`DELETE FROM invalidation_rules WHERE opportunity_id = $1 AND rule_type = 'confirmation'`, [OPP_ID]);
 
   const whatToWatch = [
-    `Stock price drops below $${minPrice ? minPrice.toFixed(5) : '0.39912'} (Minimum Price threshold — currently at $${currentPrice.toFixed(2)})`,
-    `Commitment Fee Price measurement condition occurs (determines True-Up Amount applicability)`,
-    `Registration statement declared effective (triggers Commitment Fee mechanics)`,
+    `Early-warning: market price crosses $${minPrice ? minPrice.toFixed(5) : '0.39912'} Minimum Price threshold (currently $${currentPrice.toFixed(4)}) — NOT the trigger itself`,
+    `Commitment Fee Price measurement condition occurs (the actual contractual trigger for true-up calculation)`,
+    `Registration statement declared effective (affects Commitment Fee mechanics)`,
     `New White Lion share purchases disclosed (Form 8-K or prospectus supplement)`,
-    `Next 10-Q shows updated cash position — key for materiality assessment`,
-    `New warrants or conversions disclosed (Form 4 or 8-K)`,
+    `Next 10-Q filed — updated cash position critical for materiality assessment`,
+    `New warrants, conversions, or share issuances disclosed (Form 4 or 8-K)`,
   ];
 
   for (let i = 0; i < whatToWatch.length; i++) {
@@ -345,16 +349,16 @@ async function main() {
     );
   }
 
-  // Delete old open questions and insert new ones
+  // Delete old open questions and insert ONLY unresolved ones
   await pg.query(`DELETE FROM invalidation_rules WHERE opportunity_id = $1 AND rule_type = 'open_question'`, [OPP_ID]);
 
+  // Only unresolved questions — Minimum Price and distance are now resolved
   const openQuestions = [
-    `What is the exact contractual Minimum Price? (resolved: $${minPrice ? minPrice.toFixed(5) : 'TBD — need EX-10.4 text'})`,
-    'What is the current distance between market price and that threshold?',
     'What is current unrestricted cash after the July 2026 transaction?',
     'What is current fully diluted share count?',
-    'How much of the White Lion facility has been used to date?',
+    'How much of the $50M White Lion facility has been used to date?',
     'What is the expected timing of the Commitment Fee measurement?',
+    'What are the exact warrant terms and exercise conditions?',
     'Has the amendment been discussed outside SEC filings?',
   ];
 
@@ -363,6 +367,24 @@ async function main() {
       `INSERT INTO invalidation_rules(id, opportunity_id, rule_type, definition, status, created_at)
        VALUES($1, $2, $3, $4, $5, NOW()) ON CONFLICT(id) DO NOTHING`,
       [`oq2_${i}_gctk`, OPP_ID, 'open_question', JSON.stringify({ question: openQuestions[i] }), 'open']
+    );
+  }
+
+  // Insert resolved questions as a separate section
+  await pg.query(`DELETE FROM invalidation_rules WHERE opportunity_id = $1 AND rule_type = 'resolved_question'`, [OPP_ID]);
+
+  const resolvedQuestions = [
+    `Minimum Price: $${minPrice ? minPrice.toFixed(5) : 'TBD'} (from July 14 Purchase Agreement)`,
+    `Distance from Minimum Price: ${distanceFromThreshold !== null ? distanceFromThreshold.toFixed(2) + '%' : 'TBD'} (stock at $${currentPrice.toFixed(4)})`,
+    `True-Up Amount formula: $1,000,000 minus Effective Amount (from Aug 10 amendment)`,
+    `ELOC maximum capacity: $50,000,000 with White Lion Capital (from July 14 Purchase Agreement)`,
+  ];
+
+  for (let i = 0; i < resolvedQuestions.length; i++) {
+    await pg.query(
+      `INSERT INTO invalidation_rules(id, opportunity_id, rule_type, definition, status, created_at)
+       VALUES($1, $2, $3, $4, $5, NOW()) ON CONFLICT(id) DO NOTHING`,
+      [`rq_${i}_gctk`, OPP_ID, 'resolved_question', JSON.stringify({ answer: resolvedQuestions[i] }), 'resolved']
     );
   }
 
