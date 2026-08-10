@@ -190,7 +190,7 @@ async function main() {
            hiddenAngle ? JSON.stringify(hiddenAngle) : null,
            co.filingDate]
         );
-      } catch (e) { /* duplicate */ }
+      } catch (e) { console.log(`  ⚠ ${co.ticker}: rejected-insert error — ${(e.message||'').slice(0,60)}`); }
 
       if (verStatus === 'rejected') {
         console.log(`  ❌ ${co.ticker}: REJECTED (${reason})`);
@@ -274,10 +274,14 @@ async function main() {
         }
       }
 
-      for (const [t, v] of [['opportunity', oppScore], ['information_asymmetry', infoAsym], ['company_attention', companyAttn], ['catalyst_attention', catalystAttn], ['catalyst_strength', catalystStr], ['evidence_quality', evidenceQual], ['financial_materiality', finMateriality], ['timing', timing], ['price_reaction', priceReaction], ['risk', riskScore]]) {
+      // Scores — simpler loop to avoid destructuring issues
+      var scoreRows = [['opportunity', oppScore], ['information_asymmetry', infoAsym], ['company_attention', companyAttn], ['catalyst_attention', catalystAttn], ['catalyst_strength', catalystStr], ['evidence_quality', evidenceQual], ['financial_materiality', finMateriality], ['timing', timing], ['price_reaction', priceReaction], ['risk', riskScore]];
+      for (var si = 0; si < scoreRows.length; si++) {
+        var st = scoreRows[si][0];
+        var sv = scoreRows[si][1];
         await client.query(
           'INSERT INTO scores(id,opportunity_id,score_type,value,factors,model_version,calculated_at) VALUES($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT(id) DO NOTHING',
-          ['s_' + t + '_' + hash, 'o_' + hash, t, v, JSON.stringify({ mc, companyAttn, catalystAttn, aiExtracted: !!extraction, pipeline: 'daily-top20-v3' }), '3.0.0']
+          ['s_' + st + '_' + hash, 'o_' + hash, st, sv, JSON.stringify({ mc: mc, pipeline: 'daily-top20-v3' }), '3.0.0']
         );
       }
 
@@ -313,10 +317,12 @@ async function main() {
       }
 
       if (extraction?.riskFlags) {
-        for (const rf of extraction.riskFlags) {
+        var flags = extraction.riskFlags;
+        for (var fi = 0; fi < flags.length; fi++) {
+          var rf = flags[fi];
           await client.query(
             'INSERT INTO risks(id,opportunity_id,risk_type,severity,description,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
-            [`rf_${rf.type}_${hash}`, 'o_' + hash, rf.type, rf.severity, rf.description]
+            ['rf_' + rf.type + '_' + hash, 'o_' + hash, rf.type, rf.severity, rf.description]
           );
         }
       }
@@ -330,7 +336,9 @@ async function main() {
         await client.query("UPDATE opportunities SET status='candidate' WHERE id=$1", ['o_' + hash]);
       }
 
-    } catch (e) { /* duplicate */ }
+    } catch (e) {
+      console.log(`  ⚠ ${co.ticker}: qualified-insert error — ${(e.message||'').slice(0,80)}`);
+    }
   }
 
   console.log(`\n═══ Daily Top 20 Complete ═══`);
