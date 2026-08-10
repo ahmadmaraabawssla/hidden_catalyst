@@ -82,9 +82,11 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const facts = opp.claims.filter(c => c.claimType === 'verified_fact');
   const inferences = opp.claims.filter(c => c.claimType === 'inference');
   const contradictions = opp.risks.filter(r => r.riskType === 'contradiction');
-  const realRisks = opp.risks.filter(r => !r.riskType.startsWith('overlooked_reason_') && r.riskType !== 'contradiction');
+  const missingInfo = opp.risks.filter(r => r.riskType === 'missing_info');
+  const realRisks = opp.risks.filter(r => !r.riskType.startsWith('overlooked_reason_') && r.riskType !== 'contradiction' && r.riskType !== 'missing_info');
   const overlookedReasons = opp.risks.filter(r => r.riskType.startsWith('overlooked_reason_'));
   const whatToWatch = opp.invalidationRules.filter(r => r.status === 'monitoring');
+  const openQuestions = opp.invalidationRules.filter(r => r.ruleType === 'open_question');
 
   // ── Fetch daily price returns + market depth from FMP ──
   let priceReturns: { d1: number; d5: number; d20: number } | null = null;
@@ -309,12 +311,55 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             )}
           </section>
 
+          {/* ── CAPITAL STRUCTURE ── */}
+          {(hiddenAngle?.cashExposure || hiddenAngle?.dilutionExposure || hiddenAngle?.capitalOverhang) && (
+            <section className="card">
+              <h2 className="text-base font-semibold text-gray-900 mb-3">Capital Structure Implications</h2>
+              <div className="space-y-3">
+                {hiddenAngle.cashExposure && (
+                  <div className="p-3 bg-red-50 rounded-lg border border-red-100">
+                    <h3 className="text-xs font-semibold text-red-700 uppercase mb-1">Cash Exposure</h3>
+                    <p className="text-sm text-gray-800">
+                      <span className="font-mono font-semibold">{hiddenAngle.cashExposure.amount || 'Unknown'}</span>
+                      {hiddenAngle.cashExposure.trigger && <span> — {hiddenAngle.cashExposure.trigger}</span>}
+                    </p>
+                    {hiddenAngle.cashExposure.likelihood && (
+                      <span className="text-xs text-gray-500">Likelihood: {hiddenAngle.cashExposure.likelihood}</span>
+                    )}
+                  </div>
+                )}
+                {hiddenAngle.dilutionExposure && (
+                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-100">
+                    <h3 className="text-xs font-semibold text-amber-700 uppercase mb-1">Equity Dilution</h3>
+                    <p className="text-sm text-gray-800">
+                      {hiddenAngle.dilutionExposure.potentialShares && (
+                        <span className="font-mono font-semibold">{hiddenAngle.dilutionExposure.potentialShares} shares</span>
+                      )}
+                      {hiddenAngle.dilutionExposure.pctOfOutstanding && (
+                        <span className="font-mono font-semibold"> ({hiddenAngle.dilutionExposure.pctOfOutstanding})</span>
+                      )}
+                    </p>
+                    {hiddenAngle.dilutionExposure.terms && (
+                      <p className="text-xs text-gray-500 mt-0.5">{hiddenAngle.dilutionExposure.terms}</p>
+                    )}
+                  </div>
+                )}
+                {hiddenAngle.capitalOverhang && (
+                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <h3 className="text-xs font-semibold text-gray-600 uppercase mb-1">Capital Structure Overhang</h3>
+                    <p className="text-sm text-gray-700">{hiddenAngle.capitalOverhang}</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* ── VERIFIED FACTS ── */}
           {facts.length > 0 && (
             <section className="card">
               <h2 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <span className="shrink-0 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">Fact</span>
-                <span>Verified Facts ({facts.length})</span>
+                <span className="shrink-0 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Fact</span>
+                Verified Facts ({facts.length})
               </h2>
               <div className="space-y-2">
                 {facts.map((f, i) => (
@@ -330,8 +375,8 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           {inferences.length > 0 && (
             <section className="card">
               <h2 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <span className="shrink-0 inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-medium text-purple-700">Infer</span>
-                <span>System Inferences ({inferences.length})</span>
+                <span className="shrink-0 inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">Infer</span>
+                System Inferences ({inferences.length})
               </h2>
               <div className="space-y-3">
                 {inferences.map((inf, i) => (
@@ -379,6 +424,22 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             </section>
           )}
 
+          {/* ── MISSING INFORMATION ── */}
+          {missingInfo.length > 0 && (
+            <section className="card border-amber-200 bg-amber-50/30">
+              <h2 className="text-base font-semibold text-amber-800 mb-3">Missing Information</h2>
+              <p className="text-xs text-amber-600 mb-2">Inputs required to increase confidence in this analysis</p>
+              <ul className="space-y-1.5">
+                {missingInfo.map((r, i) => (
+                  <li key={i} className="text-sm text-amber-800 flex items-start gap-2">
+                    <span className="shrink-0 mt-0.5 text-amber-400">○</span>
+                    <span>{r.description}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           {/* ── RISKS ── */}
           {realRisks.length > 0 && (
             <section className="card">
@@ -398,6 +459,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           {whatToWatch.length > 0 && (
             <section className="card border-blue-200 bg-blue-50/50">
               <h2 className="text-base font-semibold text-gray-900 mb-3">What To Watch Next</h2>
+              <p className="text-xs text-blue-500 mb-2">Signals Hidden Catalyst monitors automatically</p>
               <ul className="space-y-1.5">
                 {whatToWatch.map((r, i) => {
                   const def = r.definition as any;
@@ -405,6 +467,25 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                     <li key={i} className="text-sm text-gray-700 flex items-start gap-2">
                       <span className="shrink-0 mt-0.5 text-blue-500">→</span>
                       <span>{def?.signal || 'Monitoring in progress'}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+
+          {/* ── OPEN QUESTIONS ── */}
+          {openQuestions.length > 0 && (
+            <section className="card border-purple-200 bg-purple-50/30">
+              <h2 className="text-base font-semibold text-purple-800 mb-3">Open Questions</h2>
+              <p className="text-xs text-purple-500 mb-2">Unresolved items that would increase confidence if answered</p>
+              <ul className="space-y-1.5">
+                {openQuestions.map((q, i) => {
+                  const def = q.definition as any;
+                  return (
+                    <li key={i} className="text-sm text-purple-800 flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5 text-purple-400">?</span>
+                      <span>{def?.question || def?.signal || 'Unresolved'}</span>
                     </li>
                   );
                 })}
@@ -462,6 +543,61 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
               <p className="text-sm text-gray-500">No review actions recorded.</p>
             )}
           </section>
+
+          {/* ── CANDIDATE STATUS REQUIREMENTS ── */}
+          {verificationStatus === 'candidate' && (
+            <section className="card border-blue-200 bg-blue-50/20">
+              <h2 className="text-base font-semibold text-blue-800 mb-3">Candidate Status — Requirements</h2>
+              <div className="space-y-3">
+                <div>
+                  <h3 className="text-xs font-semibold text-green-700 uppercase mb-1">Passed</h3>
+                  <ul className="space-y-1">
+                    {(hiddenAngle?.claim || hiddenAngle?.supporting_evidence) && (
+                      <li className="text-sm text-green-800 flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5">✓</span>
+                        <span>Primary evidence found — hidden angle identified</span>
+                      </li>
+                    )}
+                    {facts.length > 0 && (
+                      <li className="text-sm text-green-800 flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5">✓</span>
+                        <span>Financial relevance identified — {facts.length} facts extracted</span>
+                      </li>
+                    )}
+                    {(scores.opportunity ?? 0) >= 40 && (
+                      <li className="text-sm text-green-800 flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5">✓</span>
+                        <span>Opportunity score {Math.round(scores.opportunity)} meets threshold</span>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+                <div>
+                  <h3 className="text-xs font-semibold text-amber-700 uppercase mb-1">Still Unresolved</h3>
+                  <ul className="space-y-1">
+                    {missingInfo.length > 0 && missingInfo.slice(0, 4).map((m, i) => (
+                      <li key={i} className="text-sm text-amber-800 flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5 text-amber-400">○</span>
+                        <span>{m.description.slice(0, 120)}{m.description.length > 120 ? '...' : ''}</span>
+                      </li>
+                    ))}
+                    {missingInfo.length === 0 && (
+                      <>
+                        <li className="text-sm text-amber-800 flex items-start gap-2">
+                          <span className="shrink-0 mt-0.5 text-amber-400">○</span>
+                          <span>Catalyst attention not fully measured</span>
+                        </li>
+                        <li className="text-sm text-amber-800 flex items-start gap-2">
+                          <span className="shrink-0 mt-0.5 text-amber-400">○</span>
+                          <span>Cross-document references may need resolution</span>
+                        </li>
+                      </>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            </section>
+          )}
 
           {/* ── RELATIONSHIP GRAPH ── */}
           {graph && graph.nodes.length > 0 ? (
