@@ -158,10 +158,36 @@ async function main() {
       } catch {}
     }
 
+    // ── Build company context: recent filing history for the LLM ──
+    let companyContext = '';
+    try {
+      const cik = String(co.cik).padStart(10, '0');
+      const subRes = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
+        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(5000)
+      });
+      if (subRes.ok) {
+        const subData = await subRes.json();
+        const recent = subData.filings?.recent;
+        if (recent?.form) {
+          var ctxParts = [];
+          for (var ci = 0; ci < Math.min(8, recent.form.length); ci++) {
+            var cf = (recent.form[ci] || '').toUpperCase().replace(/\/A$/, '');
+            var cd = recent.filingDate[ci] || '';
+            if (cf && cd) ctxParts.push(cf + ' on ' + cd);
+          }
+          companyContext = 'Last 8 filings: ' + ctxParts.join(', ') + '.';
+          // Check for merger/financing keywords
+          if (companyContext.match(/8-K.*8-K.*8-K/i) && companyContext.match(/acquisition|merger|financing|offering|equity|ELOC|warrant/i)) {
+            companyContext += ' NOTE: Recent multiple 8-Ks suggest active corporate events (merger, financing, etc). Exercise caution with share count and market cap calculations.';
+          }
+        }
+      }
+    } catch {}
+
     // Run DeepSeek v2 — two-pass extraction with rejection capability
     let extraction = null;
     if (filingText.length > 200) {
-      extraction = await extractFromFiling(filingText, co.display_name, co.ticker, co.formType, co.sector);
+      extraction = await extractFromFiling(filingText, co.display_name, co.ticker, co.formType, co.sector, companyContext);
       if (extraction) aiProcessed++;
       await sleep(2000);
     }
@@ -237,9 +263,10 @@ async function main() {
     )));
 
     const hash = 'dly_' + co.cik + '_' + co.accessionNumber.replace(/-/g, '').slice(0, 14);
-    const title = extraction
-      ? `${co.display_name} (${co.ticker}): ${extraction.eventSummary.slice(0, 80)}`
-      : `${co.display_name} (${co.ticker}) — ${co.formType}`;
+    const title = extraction?.insightTitle
+      || (extraction?.hiddenAngle
+        ? `${co.ticker}: ${extraction.hiddenAngle.claim.slice(0, 80)}`
+        : `${co.display_name} (${co.ticker}) — ${co.formType}`);
 
     const summary = extraction
       ? `[AI] ${co.display_name} (${co.ticker}) filed ${co.formType} on ${co.filingDate}. ${extraction.eventSummary}`
