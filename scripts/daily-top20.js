@@ -15,6 +15,7 @@
 
 const { Client } = require('pg');
 const { setApiKey, extractFromFiling } = require('../packages/engine/src/llm-extractor');
+const { measureAttention } = require('../packages/engine/src/catalyst-attention');
 
 // ALL secrets from environment variables ONLY
 const DB = process.env.DATABASE_URL;
@@ -238,10 +239,52 @@ async function main() {
     else if (mc < 2e9) companyAttn = 18; else if (mc < 5e9) companyAttn = 10;
     else if (mc < 10e9) companyAttn = 5; else companyAttn = 2;
 
-    // Catalyst Attention (higher = more overlooked — inverted from LLM assessment)
-    const catalystAttn = extraction?.catalystAttentionScore
-      ? (100 - extraction.catalystAttentionScore)
-      : (co.formType === '8-K' ? 40 : 20);
+    // ── V4e: Real catalyst attention measurement ──
+    let attentionProfile = { attentionScore: catalystAttn, pressRelease: { found: false, count: 0 }, news: { count: 0, sentiment: 0 }, source: 'estimate' };
+    try {
+      if (process.env.FMP_API_KEY && extraction) {
+        var keywords = [];
+        if (extraction.hiddenAngle?.claim) keywords.push(extraction.hiddenAngle.claim.slice(0, 60));
+        if (co.formType) keywords.push(co.formType);
+        attentionProfile = await measureAttention(co.ticker, process.env.FMP_API_KEY, mc, keywords);
+        console.log(`  📡 ${co.ticker}: attention=${attentionProfile.attentionScore} PR=${attentionProfile.pressRelease.found} news=${attentionProfile.news.count} (${attentionProfile.source})`);
+      }
+    } catch {}
+
+    // ── V4c: Compute filing-day price reaction from FMP ──
+    let priceReactionPct = null;
+    let volumeReactionPct = null;
+    try {
+      if (process.env.FMP_API_KEY && co.filingDate) {
+        var fmpKey = process.env.FMP_API_KEY;
+        var fmpPriceRes = await fetch(
+          `https://financialmodelingprep.com/api/v3/historical-price-eod/light?symbol=${co.ticker}&apikey=${fmpKey}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (fmpPriceRes.ok) {
+          var fmpData = await fmpPriceRes.json();
+          if (Array.isArray(fmpData) && fmpData.length > 5) {
+            // Find the trading day nearest to filing date
+            var filingTs = new Date(co.filingDate).getTime();
+            var bestIdx = 0, bestDist = Infinity;
+            for (var pi = 0; pi < Math.min(30, fmpData.length); pi++) {
+              var d = fmpData[pi];
+              var dTs = new Date(d.date).getTime();
+              var dist = Math.abs(dTs - filingTs);
+              if (dist < bestDist) { bestDist = dist; bestIdx = pi; }
+            }
+            if (bestIdx > 0 && bestDist < 3 * 86400000) {
+              var eventDay = fmpData[bestIdx];
+              var prevDay = fmpData[bestIdx + 1];
+              priceReactionPct = ((eventDay.close - prevDay.close) / prevDay.close) * 100;
+              volumeReactionPct = eventDay.volume / (prevDay.volume || 1);
+            }
+          }
+        }
+      }
+    } catch {}    // Catalyst Attention (higher = more overlooked — inverted from real measurement)
+    var realCatalystAttn = attentionProfile.attentionScore;
+    var catalystAttn = realCatalystAttn;
     const infoAsym = Math.min(100, companyAttn + catalystAttn + 5);
 
     let evidenceQual = extraction ? 85 : 80;
@@ -252,7 +295,9 @@ async function main() {
     const catalystStr = Math.min(95, Math.max(30, materiality));
     const finMateriality = Math.min(95, Math.max(25, materiality));
     const timing = daysSince <= 1 ? 95 : daysSince <= 3 ? 85 : daysSince <= 7 ? 70 : daysSince <= 14 ? 50 : 30;
-    const priceReaction = Math.min(90, Math.max(30, catalystAttn + (daysSince <= 3 ? 15 : 0)));
+    const priceReaction = priceReactionPct != null
+      ? Math.min(90, Math.max(30, Math.round(Math.abs(priceReactionPct) * 2 + 40)))
+      : Math.min(90, Math.max(30, catalystAttn + (daysSince <= 3 ? 15 : 0)));
     const riskScore = mc < 100e6 ? 60 : mc < 300e6 ? 50 : mc < 1e9 ? 40 : mc < 5e9 ? 30 : 20;
     const liquidityPenalty = mc < 100e6 ? 35 : mc < 300e6 ? 20 : mc < 1e9 ? 10 : 0;
 
@@ -282,11 +327,13 @@ async function main() {
         ['e_' + hash, 'd_' + hash, (extraction?.verifiedFacts[0] || summary).slice(0, 500), 'primary', evidenceQual]
       );
       await client.query(
-        'INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW()) ON CONFLICT(id) DO NOTHING',
+        'INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,price_change_pct,volume_change_pct,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW()) ON CONFLICT(id) DO NOTHING',
         ['o_' + hash, co.sec_id, title, summary, 'candidate',
          extraction?.verificationStatus || 'candidate',
          extraction?.hiddenAngle ? JSON.stringify(extraction.hiddenAngle) : null,
-         co.filingDate]
+         co.filingDate,
+         priceReactionPct,
+         volumeReactionPct]
       );
       await client.query(
         'INSERT INTO claims(id,opportunity_id,claim_type,text,confidence,evidence_item_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT(id) DO NOTHING',

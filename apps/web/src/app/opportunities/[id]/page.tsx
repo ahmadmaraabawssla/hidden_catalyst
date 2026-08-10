@@ -86,12 +86,14 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const overlookedReasons = opp.risks.filter(r => r.riskType.startsWith('overlooked_reason_'));
   const whatToWatch = opp.invalidationRules.filter(r => r.status === 'monitoring');
 
-  // ── Fetch daily price returns from FMP ──
+  // ── Fetch daily price returns + market depth from FMP ──
   let priceReturns: { d1: number; d5: number; d20: number } | null = null;
+  let marketDepth: { avgVolume: number; floatShares: number; shortPercent: number | null; analystCount: number | null } | null = null;
   if (opp.security.ticker) {
     try {
       const fmpKey = process.env.FMP_API_KEY || '';
       if (fmpKey) {
+        // Price returns
         const fmpRes = await fetch(
           `https://financialmodelingprep.com/api/v3/historical-price-eod/light?symbol=${opp.security.ticker}&apikey=${fmpKey}`,
           { signal: AbortSignal.timeout(5000) }
@@ -106,6 +108,27 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             priceReturns = { d1, d5, d20 };
           }
         }
+        // Market depth: profile (volume), float, short, analyst
+        const [profRes, floatRes, shortRes, analystRes] = await Promise.allSettled([
+          fetch(`https://financialmodelingprep.com/api/v3/profile/${opp.security.ticker}?apikey=${fmpKey}`, { signal: AbortSignal.timeout(4000) }),
+          fetch(`https://financialmodelingprep.com/api/v4/shares-float?symbol=${opp.security.ticker}&apikey=${fmpKey}`, { signal: AbortSignal.timeout(4000) }),
+          fetch(`https://financialmodelingprep.com/api/v3/shares-short?symbol=${opp.security.ticker}&apikey=${fmpKey}`, { signal: AbortSignal.timeout(4000) }),
+          fetch(`https://financialmodelingprep.com/api/v3/analyst-estimates/${opp.security.ticker}?apikey=${fmpKey}&limit=1`, { signal: AbortSignal.timeout(4000) }),
+        ]);
+        const profile = profRes.status === 'fulfilled' && profRes.value.ok ? await profRes.value.json().catch(() => []) : [];
+        const floatData = floatRes.status === 'fulfilled' && floatRes.value.ok ? await floatRes.value.json().catch(() => []) : [];
+        const shortData = shortRes.status === 'fulfilled' && shortRes.value.ok ? await shortRes.value.json().catch(() => []) : [];
+        const analystData = analystRes.status === 'fulfilled' && analystRes.value.ok ? await analystRes.value.json().catch(() => []) : [];
+
+        const prof = (Array.isArray(profile) ? profile[0] : profile) || {};
+        const flt = (Array.isArray(floatData) ? floatData[0] : floatData) || {};
+        const shrt = (Array.isArray(shortData) ? shortData[0] : shortData) || {};
+        marketDepth = {
+          avgVolume: prof.volAvg || 0,
+          floatShares: flt.floatShares || flt.outstandingShares || flt.freeFloat || 0,
+          shortPercent: shrt.shortPercent || shrt.shortPercentOfFloat || null,
+          analystCount: shrt.analystCount || (Array.isArray(analystData) && analystData.length > 0 ? analystData.length : null),
+        };
       }
     } catch {}
   }
@@ -219,6 +242,37 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                     <div className="text-[10px] text-gray-400">{r.label}</div>
                   </div>
                 ))}
+              </div>
+            )}
+            {/* Market depth: volume, float, short interest, analyst */}
+            {marketDepth && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                {marketDepth.avgVolume > 0 && (
+                  <div className="p-2 bg-gray-50 rounded text-center">
+                    <div className="text-sm font-bold text-gray-900">{formatMC(marketDepth.avgVolume)}</div>
+                    <div className="text-[10px] text-gray-400">Avg Volume</div>
+                  </div>
+                )}
+                {marketDepth.floatShares > 0 && (
+                  <div className="p-2 bg-gray-50 rounded text-center">
+                    <div className="text-sm font-bold text-gray-900">{formatMC(marketDepth.floatShares)}</div>
+                    <div className="text-[10px] text-gray-400">Float</div>
+                  </div>
+                )}
+                {marketDepth.shortPercent != null && (
+                  <div className="p-2 bg-gray-50 rounded text-center">
+                    <div className={`text-sm font-bold ${marketDepth.shortPercent > 10 ? 'text-red-600' : 'text-gray-900'}`}>
+                      {(marketDepth.shortPercent * 100).toFixed(1)}%
+                    </div>
+                    <div className="text-[10px] text-gray-400">Short Interest</div>
+                  </div>
+                )}
+                {marketDepth.analystCount != null && (
+                  <div className="p-2 bg-gray-50 rounded text-center">
+                    <div className="text-sm font-bold text-gray-900">{marketDepth.analystCount}</div>
+                    <div className="text-[10px] text-gray-400">Analysts</div>
+                  </div>
+                )}
               </div>
             )}
             {/* Filing-day reaction */}

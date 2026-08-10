@@ -85,6 +85,7 @@ async function findFilingByDate(cik, startDate, endDate, formTypes) {
 
 /**
  * Download a filing and extract its text.
+ * For 8-K filings, also try to download linked exhibits (EX-10.x, EX-4.x).
  */
 async function downloadFilingText(cik, acc) {
   try {
@@ -98,13 +99,60 @@ async function downloadFilingText(cik, acc) {
     var fullText = await r.text();
     var textStart = fullText.indexOf('<TEXT>');
     if (textStart < 0) return null;
-    return fullText
+    var cleanText = fullText
       .slice(textStart + 6)
       .replace(/<[^>]+>/g, ' ')
       .replace(/&#[0-9]+;/gi, ' ')
       .replace(/&[a-z]+;/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+
+    // ── Exhibit Download: parse EX-10/EX-4 references and download ──
+    var exhibitText = await downloadExhibits(fullText, cik, accNoDash);
+    if (exhibitText) {
+      cleanText = cleanText + '\n\n===EXHIBIT CONTENT===\n' + exhibitText;
+    }
+
+    return cleanText;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Parse EX-10.x/EX-4.x exhibit filenames from full filing and download them.
+ */
+async function downloadExhibits(fullFilingText, cik, accNoDash) {
+  try {
+    // Find exhibit filenames: <FILENAME>ex10-4.htm</FILENAME> etc.
+    var exhibitPattern = /<FILENAME>(ex(?:10|4|2|99)[^.\\/]*(?:\.htm|\.html|\.txt))<\/FILENAME>/gi;
+    var filenames = [];
+    var m;
+    while ((m = exhibitPattern.exec(fullFilingText)) !== null) {
+      var fn = m[1].toLowerCase().trim();
+      if (filenames.indexOf(fn) < 0) filenames.push(fn);
+    }
+
+    if (filenames.length === 0) return null;
+
+    var allExhibitText = [];
+    for (var ei = 0; ei < Math.min(5, filenames.length); ei++) {
+      var exhibitUrl = SEC_ARCH + '/' + cik + '/' + accNoDash + '/' + filenames[ei];
+      try {
+        var er = await fetch(exhibitUrl, {
+          headers: { 'User-Agent': UA },
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!er.ok) continue;
+        var etext = await er.text();
+        // Strip HTML tags
+        etext = etext.replace(/<[^>]+>/g, ' ').replace(/&#[0-9]+;/gi, ' ').replace(/&[a-z]+;/gi, ' ').replace(/\s+/g, ' ').trim();
+        if (etext.length > 200) {
+          allExhibitText.push('===EXHIBIT ' + filenames[ei] + '===\n' + etext.slice(0, 15000));
+        }
+      } catch (ex) {}
+    }
+    return allExhibitText.length > 0 ? allExhibitText.join('\n\n') : null;
   } catch (e) {
     return null;
   }
