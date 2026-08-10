@@ -86,6 +86,30 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const overlookedReasons = opp.risks.filter(r => r.riskType.startsWith('overlooked_reason_'));
   const whatToWatch = opp.invalidationRules.filter(r => r.status === 'monitoring');
 
+  // ── Fetch daily price returns from FMP ──
+  let priceReturns: { d1: number; d5: number; d20: number } | null = null;
+  if (opp.security.ticker) {
+    try {
+      const fmpKey = process.env.FMP_API_KEY || '';
+      if (fmpKey) {
+        const fmpRes = await fetch(
+          `https://financialmodelingprep.com/api/v3/historical-price-eod/light?symbol=${opp.security.ticker}&apikey=${fmpKey}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (fmpRes.ok) {
+          const fmpData = await fmpRes.json();
+          if (Array.isArray(fmpData) && fmpData.length >= 21) {
+            const latest = fmpData[0];
+            const d1 = fmpData.length > 1  ? ((latest.close - fmpData[1].close) / fmpData[1].close) * 100 : 0;
+            const d5 = fmpData.length > 5  ? ((latest.close - fmpData[5].close) / fmpData[5].close) * 100 : 0;
+            const d20 = fmpData.length > 20 ? ((latest.close - fmpData[20].close) / fmpData[20].close) * 100 : 0;
+            priceReturns = { d1, d5, d20 };
+          }
+        }
+      }
+    } catch {}
+  }
+
   let historicalSummary: string | null = null;
   try {
     const hist = await analyzeHistoricalReactions({
@@ -177,9 +201,38 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             </section>
           )}
 
-          {/* ── MARKET REACTION ── */}
+          {/* ── MARKET CONTEXT ── */}
           <section className="card">
             <h2 className="text-base font-semibold text-gray-900 mb-3">Market Context</h2>
+            {/* Price returns from FMP */}
+            {priceReturns && (
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {[
+                  { label: '1D Return', val: priceReturns.d1 },
+                  { label: '5D Return', val: priceReturns.d5 },
+                  { label: '20D Return', val: priceReturns.d20 },
+                ].map((r, i) => (
+                  <div key={i} className="p-2 bg-gray-50 rounded text-center">
+                    <div className={`text-sm font-bold tabular-nums ${r.val >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {r.val >= 0 ? '+' : ''}{r.val.toFixed(2)}%
+                    </div>
+                    <div className="text-[10px] text-gray-400">{r.label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Filing-day reaction */}
+            {opp.priceChangePercent != null && (
+              <div className="mb-3 flex items-center gap-2 text-xs text-gray-500">
+                <span>Filing day reaction:</span>
+                <span className={`font-semibold tabular-nums ${opp.priceChangePercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {opp.priceChangePercent >= 0 ? '+' : ''}{opp.priceChangePercent.toFixed(2)}%
+                </span>
+                {opp.volumeChangePercent != null && (
+                  <span className="text-gray-400">· Vol: {(opp.volumeChangePercent * 100).toFixed(0)}% avg</span>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <ScoreCard label="Opportunity" value={scores.opportunity ?? 0} />
               <ScoreCard label="Not Priced In" value={scores.price_reaction ?? 0} />
@@ -198,12 +251,6 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 <h3 className="text-xs font-semibold text-blue-800 mb-1">Comparable Events</h3>
                 <p className="text-sm text-blue-900">{historicalSummary}</p>
                 <p className="text-xs text-blue-400 mt-1">Historical observation, not a prediction.</p>
-              </div>
-            )}
-            {opp.priceChangePercent != null && (
-              <div className="mt-3 flex gap-4 text-xs text-gray-500">
-                <span>Price change: <span className={opp.priceChangePercent >= 0 ? 'text-green-600' : 'text-red-600'}>{opp.priceChangePercent >= 0 ? '+' : ''}{opp.priceChangePercent.toFixed(1)}%</span></span>
-                {opp.volumeChangePercent != null && <span>Volume: {(opp.volumeChangePercent * 100).toFixed(0)}% of avg</span>}
               </div>
             )}
           </section>
