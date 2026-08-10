@@ -13,45 +13,56 @@ export async function POST(req: NextRequest) {
   const maxScan = body.maxScan || 500;
   const maxDeepResearch = body.maxDeepResearch || 100;
 
-  const pg = new Client({ connectionString: process.env.DATABASE_URL });
-  await pg.connect();
-
+  // Create run record in DB
+  let pg: any = null;
   try {
-    // Create run record
+    const { Client } = await import('pg');
+    pg = new Client({ connectionString: process.env.DATABASE_URL });
+    await pg.connect();
     await pg.query(
       `INSERT INTO discovery_runs(id, status, engine_version, target_candidates, max_scan, max_deep_research)
        VALUES ($1, 'running', 'v3', $2, $3, $4)`,
       [runId, targetCandidates, maxScan, maxDeepResearch]
     );
+    await pg.end();
+    pg = null;
+  } catch (e: any) {
+    try { await pg?.end(); } catch (_: any) {}
+    return NextResponse.json({ success: false, error: 'DB init: ' + e.message });
+  }
 
-    // Run pipeline synchronously from monorepo root
-    const rootDir = path.resolve(process.cwd(), '..', '..');
-    const scriptPath = path.join(rootDir, 'scripts', 'daily-top20.js');
+  // Run pipeline from monorepo root (PG connection closed — pipeline opens its own)
+  const rootDir = path.resolve(process.cwd(), '..', '..');
+  const scriptPath = path.join(rootDir, 'scripts', 'daily-top20.js');
 
-    let stdout = '';
-    let success = false;
-    try {
-      stdout = execSync(`node "${scriptPath}"`, {
-        cwd: rootDir,
-        timeout: 240000,
-        env: {
-          ...process.env,
-          DATABASE_URL: process.env.DATABASE_URL,
-          DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || '',
-          FMP_API_KEY: process.env.FMP_API_KEY || '',
-          RUN_ID: runId,
-          TARGET_CANDIDATES: String(targetCandidates),
-          MAX_SCAN: String(maxScan),
-          MAX_DEEP_RESEARCH: String(maxDeepResearch),
-        },
-      }).toString();
-      success = true;
-    } catch (e: any) {
-      stdout = e.stdout?.toString() || '';
-      console.error('[Discovery] Pipeline error:', e.stderr?.toString()?.slice(-500));
-    }
+  let stdout = '';
+  let success = false;
+  try {
+    stdout = execSync(`node "${scriptPath}"`, {
+      cwd: rootDir,
+      timeout: 240000,
+      env: {
+        ...process.env,
+        DATABASE_URL: process.env.DATABASE_URL,
+        DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || '',
+        FMP_API_KEY: process.env.FMP_API_KEY || '',
+        RUN_ID: runId,
+        TARGET_CANDIDATES: String(targetCandidates),
+        MAX_SCAN: String(maxScan),
+        MAX_DEEP_RESEARCH: String(maxDeepResearch),
+      },
+    }).toString();
+    success = true;
+  } catch (e: any) {
+    stdout = e.stdout?.toString() || '';
+  }
 
-    // Parse funnel stats
+  // Parse funnel, update run record with new PG connection
+  try {
+    const { Client } = await import('pg');
+    pg = new Client({ connectionString: process.env.DATABASE_URL });
+    await pg.connect();
+
     const screened = stdout.match(/Screened:\s*(\d+)/)?.[1] || '0';
     const filings = stdout.match(/Recent filings:\s*(\d+)/)?.[1] || '0';
     const researched = stdout.match(/Deep researched:\s*(\d+)/)?.[1] || '0';
@@ -69,7 +80,6 @@ export async function POST(req: NextRequest) {
        parseInt(qualified), parseInt(rejected), parseInt(watched), runId]
     );
 
-    // Tag new v3 opportunities
     if (success) {
       await pg.query(
         `UPDATE opportunities SET run_id=$1, last_researched_at=NOW() WHERE engine_version='v3' AND run_id IS NULL`,
@@ -89,11 +99,9 @@ export async function POST(req: NextRequest) {
         rejected: parseInt(rejected),
         watched: parseInt(watched),
       },
-      output: stdout.slice(-2000),
     });
   } catch (e: any) {
-    await pg.query(`UPDATE discovery_runs SET status='error', error_message=$1 WHERE id=$2`, [e.message, runId]).catch(() => {});
-    await pg.end();
-    return NextResponse.json({ success: false, error: e.message });
+    try { await pg?.end(); } catch (_: any) {}
+    return NextResponse.json({ success, error: 'Run complete but DB update failed: ' + e.message });
   }
 }
