@@ -63,7 +63,7 @@ export interface ScoreResult {
   modelVersion: string;
 }
 
-export const SCORE_MODEL_VERSION = '2.0.0';
+export const SCORE_MODEL_VERSION = '3.0.0';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
