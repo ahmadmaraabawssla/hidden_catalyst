@@ -12,16 +12,6 @@ export async function POST(req: NextRequest) {
   const targetCandidates = body.targetCandidates || 20;
   const maxScan = body.maxScan || 500;
   const maxDeepResearch = body.maxDeepResearch || 100;
-  const quickMode = body.quickMode || false;
-
-  // Use quick mode for testing (lower limits)
-  const cmd = quickMode
-    ? ['-e', `
-        process.env.DATABASE_URL = process.env.DATABASE_URL;
-        process.env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-        require('${path.resolve(process.cwd(), 'scripts/daily-top20.js')}');
-      `]
-    : ['scripts/daily-top20.js'];
 
   return new Promise((resolve) => {
     const pg = new Client({ connectionString: process.env.DATABASE_URL });
@@ -33,15 +23,14 @@ export async function POST(req: NextRequest) {
         [runId, targetCandidates, maxScan, maxDeepResearch]
       );
 
-      // Run the pipeline as a child process
-      const child = spawn('node', ['-e', `
-        process.env.DATABASE_URL = '${process.env.DATABASE_URL}';
-        process.env.DEEPSEEK_API_KEY = '${process.env.DEEPSEEK_API_KEY || ''}';
-        process.env.FMP_API_KEY = '${process.env.FMP_API_KEY || ''}';
-        process.env.RUN_ID = '${runId}';
-        require('${path.resolve(process.cwd(), 'scripts/daily-top20.js').replace(/\\/g, '/')}');
-      `], {
-        cwd: process.cwd(),
+      // Run the pipeline as a child process from the monorepo root
+      // process.cwd() is apps/web in Next.js — go up 2 levels to workspace root
+      const rootDir = path.resolve(process.cwd(), '..', '..');
+      const scriptPath = path.join(rootDir, 'scripts', 'daily-top20.js');
+      console.log('[Discovery] Root:', rootDir, 'Script:', scriptPath);
+
+      const child = spawn('node', [scriptPath], {
+        cwd: rootDir,
         timeout: 240000,
         env: {
           ...process.env,
