@@ -22,6 +22,7 @@ function verBadge(s: string | null): { label: string; color: string } {
     case 'verified': return { label: 'Verified', color: 'bg-green-100 text-green-800' };
     case 'candidate': return { label: 'Candidate', color: 'bg-blue-100 text-blue-800' };
     case 'watch': return { label: 'Watch', color: 'bg-amber-100 text-amber-800' };
+    case 'rejected': return { label: 'Rejected', color: 'bg-red-100 text-red-700' };
     default: return { label: s || 'Unknown', color: 'bg-gray-100 text-gray-600' };
   }
 }
@@ -34,9 +35,9 @@ function researchPct(opp: any): number {
   const ha = opp.hiddenAngle as any;
   let ok = 0, partial = 0;
   if (ha?.claim) ok++;
-  if (opp.claims?.length > 0) ok++;
-  if (opp.risks?.some((r: any) => r.riskType === 'contradiction')) ok++;
-  if (opp.invalidationRules?.some((r: any) => r.status === 'monitoring')) ok++;
+  if ((opp._count?.claims || opp.claims?.length || 0) > 0) ok++;
+  if ((opp.risks || []).length > 0) ok++;
+  if ((opp.invalidationRules || []).some((r: any) => r.status === 'monitoring')) ok++;
   if (opp.priceChangePercent != null) ok++;
   if (ha?.cashExposure?.amount) partial++;
   if (ha?.capitalOverhang) partial++;
@@ -48,12 +49,85 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
   const tab = (searchParams.tab as string) || 'hidden';
   const sort = (searchParams.sort as 'opportunity' | 'recent' | 'asymmetry') || 'opportunity';
 
-  const { opportunities: allOpps, total: totalPublished } = await getPublishedOpportunities({ sort, limit: 100 });
+  // Fetch via raw PG since Prisma client doesn't have verification_status / engine_version
+  let allOpps: any[] = [];
+  try {
+    const { Client } = await import('pg');
+    const pg = new Client({ connectionString: process.env.DATABASE_URL });
+    await pg.connect();
+    const result = await pg.query(`
+      SELECT o.id, o.title, o.summary, o.status, o.verification_status,
+             o.hidden_angle, o.detected_at, o.published_at, o.confidence as verification_confidence,
+             o.price_change_pct, o.volume_change_pct,
+             COALESCE(o.engine_version, 'v1_legacy') as engine_version,
+             COALESCE(o.research_depth, 'shallow') as research_depth,
+             s.ticker, s.latest_price, s.market_cap, s.exchange,
+             c.display_name as company_name, c.sector, c.industry,
+             (SELECT COUNT(*) FROM claims WHERE opportunity_id = o.id AND claim_type = 'verified_fact') as fact_count,
+             (SELECT json_agg(json_build_object('scoreType', score_type, 'value', value))
+              FROM scores WHERE opportunity_id = o.id) as scores_json,
+             (SELECT json_agg(json_build_object('riskType', risk_type, 'severity', severity, 'description', description))
+              FROM risks WHERE opportunity_id = o.id AND risk_type = 'contradiction') as contradictions_json,
+             (SELECT json_agg(json_build_object('status', status, 'ruleType', rule_type, 'definition', definition))
+              FROM invalidation_rules WHERE opportunity_id = o.id) as invalidation_json
+      FROM opportunities o
+      JOIN securities s ON s.id = o.security_id
+      JOIN companies c ON c.id = s.company_id
+      WHERE o.status = 'published' AND s.active = true
+        AND s.exchange IN ('NYSE', 'NASDAQ', 'NYSE American')
+        AND (s.market_cap IS NULL OR s.market_cap <= 10000000000)
+      ORDER BY o.published_at DESC NULLS LAST
+      LIMIT 100
+    `);
+    allOpps = result.rows.map(r => ({
+      id: r.id,
+      title: r.title,
+      summary: r.summary,
+      status: r.status,
+      verificationStatus: r.verification_status,
+      hiddenAngle: r.hidden_angle,
+      detectedAt: r.detected_at,
+      publishedAt: r.published_at,
+      verificationConfidence: r.verification_confidence,
+      priceChangePercent: r.price_change_pct,
+      volumeChangePercent: r.volume_change_pct,
+      engine_version: r.engine_version,
+      research_depth: r.research_depth,
+      security: {
+        ticker: r.ticker,
+        latestPrice: r.latest_price,
+        marketCap: r.market_cap,
+        exchange: r.exchange,
+        company: { displayName: r.company_name, sector: r.sector, industry: r.industry },
+      },
+      scores: r.scores_json || [],
+      risks: r.contradictions_json?.filter((x: any) => x) || [],
+      invalidationRules: r.invalidation_json?.filter((x: any) => x) || [],
+      claims: Array(r.fact_count || 0).fill(0).map((_, i) => ({ claimType: 'verified_fact', text: '' })),
+      _count: { claims: r.fact_count || 0 },
+    }));
+    await pg.end();
+  } catch {}
+
+  // Sort
+  if (sort === 'opportunity') {
+    allOpps.sort((a, b) => {
+      const sa = (a.scores || []).find((s: any) => s.scoreType === 'opportunity')?.value ?? 0;
+      const sb = (b.scores || []).find((s: any) => s.scoreType === 'opportunity')?.value ?? 0;
+      return sb - sa;
+    });
+  } else if (sort === 'asymmetry') {
+    allOpps.sort((a, b) => {
+      const sa = (a.scores || []).find((s: any) => s.scoreType === 'information_asymmetry')?.value ?? 0;
+      const sb = (b.scores || []).find((s: any) => s.scoreType === 'information_asymmetry')?.value ?? 0;
+      return sb - sa;
+    });
+  }
 
   // Filter by tab
   const opportunities = allOpps.filter((o: any) => {
     var vs = o.verificationStatus;
-    var ev = (o as any).engine_version || 'v1_legacy';
+    var ev = o.engine_version || 'v1_legacy';
     if (tab === 'hidden') return (vs === 'candidate' || vs === 'verified') && ev !== 'v1_legacy';
     if (tab === 'queue') return vs === 'watch';
     if (tab === 'reprocess') return ev === 'v1_legacy';
@@ -103,21 +177,21 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
           { key: 'queue', label: 'Research Queue', count: wCount, active: 'border-brand-600 text-brand-700 bg-brand-50/50' },
           { key: 'reprocess', label: 'Needs Reprocessing', count: rpCount, active: 'border-amber-500 text-amber-700 bg-amber-50/50' },
           { key: 'rejected', label: 'Rejected / Routine', count: rCount, active: 'border-red-500 text-red-700 bg-red-50/50' },
-        ].map(t => (
+        ].map(tabItem => (
           <a
-            key={t.key}
-            href={`/feed?tab=${t.key}&sort=${sort}`}
+            key={tabItem.key}
+            href={`/feed?tab=${tabItem.key}&sort=${sort}`}
             className={`px-3 py-2 text-xs sm:text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
-              tab === t.key
-                ? t.active
+              tab === tabItem.key
+                ? tabItem.active
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
-            {t.label}
+            {tabItem.label}
             <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 ${
-              tab === t.key ? 'bg-white/60' : 'bg-gray-100 text-gray-500'
+              tab === tabItem.key ? 'bg-white/60' : 'bg-gray-100 text-gray-500'
             }`}>
-              {t.count}
+              {tabItem.count}
             </span>
           </a>
         ))}
@@ -134,7 +208,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
             <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 ${
               tab === t.key ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500'
             }`}>
-              {t.count}
+              {tabItem.count}
             </span>
           </a>
         ))}
@@ -181,7 +255,9 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                   ? 'Opportunities appear after passing qualification: hidden angle, credible evidence, no fatal contradiction.'
                   : tab === 'queue'
                   ? 'Items flagged for investigation appear here.'
-                  : 'Rejected and routine filings for auditability.'}
+                  : tab === 'reprocess'
+                  ? 'Legacy pipeline items pending v3 reanalysis.'
+                  : 'Rejected and routine filings.'}
               </p>
             </div>
           ) : (
@@ -191,7 +267,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
               const vs = verBadge(opp.verificationStatus);
               const rpct = researchPct(opp);
               const scoreConfident = opp.priceChangePercent != null && opp.verificationStatus === 'verified';
-              const facts = opp.claims.filter((c: any) => c.claimType === 'verified_fact');
+              const factCount = opp._count?.claims || opp.claims?.length || 0;
 
               return (
                 <Link
@@ -243,24 +319,24 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
 
                   {/* Compact footer */}
                   <div className="flex items-center gap-2 text-[10px] text-gray-400 flex-wrap">
-                    {facts.length > 0 && (
+                    {factCount > 0 && (
                       <span className="inline-flex items-center gap-1">
-                        <span className="text-green-500">●</span> {facts.length} facts
+                        <span className="text-green-500">●</span> {factCount} facts
                       </span>
                     )}
                     <span>{new Date(opp.detectedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                     {opp.verificationConfidence != null && (
                       <span>· Conf: {Math.round((opp.verificationConfidence || 0) * 100)}%</span>
                     )}
-                    {((opp as any).engine_version) && (
+                    {(opp.engine_version) && (
                       <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-medium ${
-                        (opp as any).engine_version === 'v3_investigation' ? 'bg-green-100 text-green-700' :
-                        (opp as any).engine_version === 'v1_legacy' ? 'bg-amber-100 text-amber-700' :
+                        opp.engine_version === 'v3_investigation' ? 'bg-green-100 text-green-700' :
+                        opp.engine_version === 'v1_legacy' ? 'bg-amber-100 text-amber-700' :
                         'bg-gray-100 text-gray-600'
                       }`}>
-                        {(opp as any).engine_version === 'v3_investigation' ? 'v3 research' :
-                         (opp as any).engine_version === 'v1_legacy' ? 'v1 legacy' :
-                         (opp as any).engine_version}
+                        {opp.engine_version === 'v3_investigation' ? 'v3 research' :
+                         opp.engine_version === 'v1_legacy' ? 'v1 legacy' :
+                         opp.engine_version}
                       </span>
                     )}
                   </div>
@@ -270,7 +346,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
           )}
 
           <p className="text-center text-xs text-gray-400 pt-4">
-            Discovery funnel: {hcCount} qualified from {totalPublished} analyzed &middot; Eligible: NYSE/NASDAQ &le; $10B
+            Discovery funnel: {hcCount} qualified from {allOpps.length} analyzed &middot; Eligible: NYSE/NASDAQ up to $10B
           </p>
         </div>
       </div>
