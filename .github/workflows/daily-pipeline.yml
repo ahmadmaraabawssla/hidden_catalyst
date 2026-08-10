@@ -1,0 +1,39 @@
+name: Daily Pipeline (00:01 Israel = 21:01 UTC)
+
+on:
+  schedule:
+    # 21:01 UTC = 00:01 Israel (UTC+3)
+    - cron: '1 21 * * *'
+  workflow_dispatch:  # allow manual trigger
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Refresh market caps
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: node scripts/fmp-updater.js
+
+      - name: Discover new opportunities
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: node scripts/daily-top20.js
