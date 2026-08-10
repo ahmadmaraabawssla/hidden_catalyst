@@ -43,12 +43,12 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
 
   const { opportunities: allOpps, total: totalPublished } = await getPublishedOpportunities({ sort, limit: 200 });
 
-  // Tab filtering in memory
+  // Tab filtering in memory (engine_version not in Prisma client — use verification_status as proxy)
   const opportunities = allOpps.filter((o: any) => {
     if (tab === 'hidden') return o.verificationStatus === 'candidate' || o.verificationStatus === 'verified';
     if (tab === 'queue') return o.verificationStatus === 'watch';
-    if (tab === 'legacy') return o.engineVersion === 'v1_legacy';
-    return o.verificationStatus === 'rejected' && o.engineVersion !== 'v1_legacy';
+    if (tab === 'legacy') return o.verificationStatus === 'rejected'; // all rejected = v1 legacy currently
+    return false; // no true rejected after v3 research yet
   });
 
   // Raw PG for accurate tab counts
@@ -131,7 +131,6 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
               const ha = opp.hiddenAngle as any;
               const vs = verBadge(opp.verificationStatus);
               const rpct = researchPct(opp);
-              const isLegacy = opp.engineVersion === 'v1_legacy';
               const facts = opp.claims?.filter((c: any) => c.claimType === 'verified_fact') || [];
 
               return (
@@ -146,7 +145,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                       {opp.security.latestPrice && <span className="text-xs text-gray-600 font-mono">{formatPrice(opp.security.latestPrice)}</span>}
                       {opp.security.marketCap && <span className="text-xs text-gray-500">{formatMC(opp.security.marketCap)}</span>}
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${vs.color}`}>{vs.label}</span>
-                      {isLegacy && <span className="text-[10px] text-purple-500 font-medium">v1</span>}
+                      {tab === 'legacy' && <span className="text-[10px] text-purple-500 font-medium">v1</span>}
                     </div>
                     <div className="text-right shrink-0 min-w-[56px]">
                       <div className="text-sm font-semibold text-amber-600">Prelim</div>
