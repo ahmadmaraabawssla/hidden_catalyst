@@ -51,17 +51,32 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
   const vsFilter = tab === 'hidden' ? ['candidate', 'verified'] :
     tab === 'queue' ? 'watch' : 'rejected';
 
-  const { opportunities, total } = await getPublishedOpportunities({
-    sort,
-    limit: 50,
-    verificationStatus: vsFilter,
-  });
+  const { opportunities: allOpps, total: totalPublished } = await getPublishedOpportunities({ sort, limit: 50 });
 
-  const [hcCount, wCount, rCount] = await Promise.all([
-    getPublishedOpportunities({ limit: 1, verificationStatus: ['candidate', 'verified'] }),
-    getPublishedOpportunities({ limit: 1, verificationStatus: 'watch' }),
-    getPublishedOpportunities({ limit: 1, verificationStatus: 'rejected' }),
-  ]);
+  // Filter by verificationStatus in memory (Prisma client not regenerated)
+  const opportunities = allOpps.filter((o: any) =>
+    vsFilter === 'watch' ? o.verificationStatus === 'watch' :
+    vsFilter === 'rejected' ? o.verificationStatus === 'rejected' :
+    Array.isArray(vsFilter) ? vsFilter.includes(o.verificationStatus) :
+    o.verificationStatus === vsFilter
+  );
+
+  // Use raw PG for tab counts
+  let hcCount = 0, wCount = 0, rCount = 0;
+  try {
+    const { Client } = await import('pg');
+    const pg = new Client({ connectionString: process.env.DATABASE_URL });
+    await pg.connect();
+    const counts = await pg.query(
+      `SELECT verification_status, COUNT(*) as cnt FROM opportunities WHERE status = 'published' GROUP BY verification_status`
+    );
+    for (const row of counts.rows) {
+      if (row.verification_status === 'candidate' || row.verification_status === 'verified') hcCount += Number(row.cnt);
+      else if (row.verification_status === 'watch') wCount += Number(row.cnt);
+      else if (row.verification_status === 'rejected') rCount += Number(row.cnt);
+    }
+    await pg.end();
+  } catch {}
 
   return (
     <div className="page-container">
@@ -77,9 +92,9 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
       {/* Tab bar */}
       <div className="flex gap-1 mb-6 border-b border-gray-200">
         {[
-          { key: 'hidden', label: 'Hidden Opportunities', count: hcCount.total },
-          { key: 'queue', label: 'Research Queue', count: wCount.total },
-          { key: 'rejected', label: 'Rejected / Routine', count: rCount.total },
+          { key: 'hidden', label: 'Hidden Opportunities', count: hcCount },
+          { key: 'queue', label: 'Research Queue', count: wCount },
+          { key: 'rejected', label: 'Rejected / Routine', count: rCount },
         ].map(t => (
           <a
             key={t.key}
@@ -219,7 +234,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
           )}
 
           <p className="text-center text-xs text-gray-400 pt-4">
-            Eligible universe: NYSE / NASDAQ &le; $10B market cap &middot; {total} matching
+            Eligible universe: NYSE / NASDAQ &le; $10B market cap &middot; {opportunities.length} shown &middot; {totalPublished} published
           </p>
         </div>
       </div>
