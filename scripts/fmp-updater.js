@@ -93,7 +93,7 @@ async function main() {
     const filingDate = new Date(inc.filingDate || inc.date || '1970-01-01');
     const daysSinceFiling = Math.round((Date.now() - filingDate) / 86400000);
 
-    if (diff > 0.15 && daysSinceFiling > 30) {
+    if (diff > 0.15 && diff < 0.50) {
       const correctedMc = diluted * sec.latest_price;
       await client.query(`UPDATE securities SET market_cap=$1, updated_at=NOW(),
         attributes=COALESCE(attributes,'{}'::jsonb)||'{"mc_auto":true,"mc_note":"post-corp-action, diluted shares"}'::jsonb
