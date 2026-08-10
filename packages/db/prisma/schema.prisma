@@ -1,0 +1,403 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users & Roles ───
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  role              String   @default("user") // user, analyst, admin
+  timezone          String   @default("America/New_York")
+  policyAcceptances Json     @default("[]")
+  createdAt         DateTime @default(now()) @map("created_at")
+  lastLoginAt       DateTime? @map("last_login_at")
+
+  watchlists   Watchlist[]
+  alertRules   AlertRule[]
+  notifications Notification[]
+  reviewActions ReviewAction[]
+
+  @@map("users")
+}
+
+// ─── Company & Security Master ───
+
+model Company {
+  id          String   @id @default(cuid())
+  legalName   String   @map("legal_name")
+  displayName String   @map("display_name")
+  cik         String?  @unique
+  lei         String?
+  sector      String?
+  industry    String?
+  website     String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  securities     Security[]
+  entityMappings EntityMapping[]
+
+  @@map("companies")
+}
+
+model Security {
+  id              String   @id @default(cuid())
+  companyId        String   @map("company_id")
+  ticker          String
+  exchange        String
+  securityType    String   @default("common_stock") @map("security_type")
+  active          Boolean  @default(true)
+  marketCap       Float?   @map("market_cap")
+  avgDollarVolume Float?   @map("avg_dollar_volume")
+  latestPrice     Float?   @map("latest_price")
+  latestPriceDate DateTime? @map("latest_price_date")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  company       Company        @relation(fields: [companyId], references: [id])
+  opportunities Opportunity[]
+
+  @@unique([exchange, ticker])
+  @@map("securities")
+}
+
+// ─── Sources & Documents ───
+
+model Source {
+  id              String   @id @default(cuid())
+  name            String
+  family          String   // sec_edgar, federal_contracts, fda, etc.
+  accessType      String   @map("access_type")
+  reliabilityTier Int      @default(3) @map("reliability_tier") // 1 = highest
+  legalBasis      String?  @map("legal_basis")
+  termsReviewedAt DateTime? @map("terms_reviewed_at")
+  enabled         Boolean  @default(true)
+  schedule        Json?
+  rateLimit       Json?    @map("rate_limit")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  documents     Document[]
+  ingestionRuns IngestionRun[]
+
+  @@map("sources")
+}
+
+model Document {
+  id            String   @id @default(cuid())
+  sourceId      String   @map("source_id")
+  canonicalUrl  String   @map("canonical_url")
+  publishedAt   DateTime @map("published_at")
+  retrievedAt   DateTime @map("retrieved_at")
+  contentHash   String   @map("content_hash")
+  title         String?
+  rawObjectKey  String?  @map("raw_object_key")
+  text          String?
+  language      String   @default("en")
+  parserVersion String?  @map("parser_version")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  source        Source         @relation(fields: [sourceId], references: [id])
+  evidenceItems EvidenceItem[]
+
+  @@unique([contentHash])
+  @@map("documents")
+}
+
+// ─── Knowledge Graph Entities ───
+
+model Entity {
+  id           String   @id @default(cuid())
+  entityType   String   @map("entity_type") // company, person, agency, product, facility, patent, contract, trial
+  canonicalName String  @map("canonical_name")
+  attributes   Json     @default("{}")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  aliases          EntityAlias[]
+  entityMappings   EntityMapping[]
+  relationshipsFrom Relationship[] @relation("FromEntity")
+  relationshipsTo   Relationship[] @relation("ToEntity")
+  events           Event[]
+
+  @@map("entities")
+}
+
+model EntityAlias {
+  id             String   @id @default(cuid())
+  entityId       String   @map("entity_id")
+  alias          String
+  normalizedAlias String  @map("normalized_alias")
+  sourceId       String?  @map("source_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  entity Entity @relation(fields: [entityId], references: [id])
+
+  @@map("entity_aliases")
+}
+
+model EntityMapping {
+  id            String   @id @default(cuid())
+  companyId     String   @map("company_id")
+  entityId      String   @map("entity_id")
+  confidence    Float    @default(1.0)
+  mappingSource String?  @map("mapping_source")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id])
+  entity  Entity  @relation(fields: [entityId], references: [id])
+
+  @@map("entity_mappings")
+}
+
+model Relationship {
+  id               String   @id @default(cuid())
+  fromEntityId     String   @map("from_entity_id")
+  toEntityId       String   @map("to_entity_id")
+  relationshipType String   @map("relationship_type")
+  directness       String   @default("direct") // direct, indirect
+  confidence       Float    @default(1.0)
+  materiality      Float?
+  validFrom        DateTime? @map("valid_from")
+  validTo          DateTime? @map("valid_to")
+  evidenceId       String?  @map("evidence_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  fromEntity Entity        @relation("FromEntity", fields: [fromEntityId], references: [id])
+  toEntity   Entity        @relation("ToEntity", fields: [toEntityId], references: [id])
+  evidence   EvidenceItem? @relation(fields: [evidenceId], references: [id])
+
+  @@map("relationships")
+}
+
+// ─── Events ───
+
+model Event {
+  id            String    @id @default(cuid())
+  eventType     String    @map("event_type")
+  title         String
+  occurredAt    DateTime? @map("occurred_at")
+  expectedAt    DateTime? @map("expected_at")
+  status        String    @default("detected")
+  geography     String?
+  primaryEntityId String? @map("primary_entity_id")
+  attributes    Json      @default("{}")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  primaryEntity Entity?       @relation(fields: [primaryEntityId], references: [id])
+  opportunities Opportunity[]
+
+  @@map("events")
+}
+
+// ─── Evidence ───
+
+model EvidenceItem {
+  id           String   @id @default(cuid())
+  documentId   String   @map("document_id")
+  excerpt      String?
+  locatorJson  Json?    @map("locator_json")
+  evidenceType String   @map("evidence_type") // primary, secondary, tertiary
+  qualityScore Float?   @map("quality_score")
+  verifiedBy   String?  @map("verified_by")
+  verifiedAt   DateTime? @map("verified_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  document     Document       @relation(fields: [documentId], references: [id])
+  relationships Relationship[]
+
+  @@map("evidence_items")
+}
+
+// ─── Opportunities ───
+
+model Opportunity {
+  id           String   @id @default(cuid())
+  securityId   String   @map("security_id")
+  eventId      String?  @map("event_id")
+  title        String
+  summary      String?
+  status       String   @default("candidate") // candidate, needs_review, approved, published, rejected, archived, invalidated
+  detectedAt   DateTime @default(now()) @map("detected_at")
+  publishedAt  DateTime? @map("published_at")
+  confidence   Float?
+  reviewerId   String?  @map("reviewer_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  security         Security          @relation(fields: [securityId], references: [id])
+  event            Event?            @relation(fields: [eventId], references: [id])
+  claims           Claim[]
+  scores           Score[]
+  risks            Risk[]
+  invalidationRules InvalidationRule[]
+  notifications    Notification[]
+  reviewActions    ReviewAction[]
+
+  priceChangePercent     Float?   @map("price_change_pct")
+  volumeChangePercent    Float?   @map("volume_change_pct")
+  sectorChangePercent    Float?   @map("sector_change_pct")
+  priceReactionDate      DateTime? @map("price_reaction_date")
+
+  @@map("opportunities")
+}
+
+model Claim {
+  id            String   @id @default(cuid())
+  opportunityId String   @map("opportunity_id")
+  claimType     String   @map("claim_type") // verified_fact, inference, estimate, assumption, unconfirmed_signal
+  text          String
+  confidence    Float?
+  evidenceItemIds Json   @default("[]") @map("evidence_item_ids")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+
+  @@map("claims")
+}
+
+model Score {
+  id            String   @id @default(cuid())
+  opportunityId String   @map("opportunity_id")
+  scoreType     String   @map("score_type")
+  value         Float
+  factors       Json
+  modelVersion  String   @map("model_version")
+  calculatedAt  DateTime @default(now()) @map("calculated_at")
+  overriddenBy  String?  @map("overridden_by")
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+
+  @@index([opportunityId, scoreType])
+  @@map("scores")
+}
+
+model Risk {
+  id            String   @id @default(cuid())
+  opportunityId String   @map("opportunity_id")
+  riskType      String   @map("risk_type")
+  severity      String   @default("medium") // low, medium, high, critical
+  description   String?
+  evidenceItemId String? @map("evidence_item_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+
+  @@map("risks")
+}
+
+model InvalidationRule {
+  id            String   @id @default(cuid())
+  opportunityId String   @map("opportunity_id")
+  ruleType      String   @map("rule_type") // confirmation, invalidation
+  definition    Json
+  status        String   @default("monitoring") // monitoring, triggered, resolved
+  triggeredAt   DateTime? @map("triggered_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+
+  @@map("invalidation_rules")
+}
+
+// ─── Watchlists & Alerts ───
+
+model Watchlist {
+  id       String   @id @default(cuid())
+  userId   String   @map("user_id")
+  name     String
+  settings Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User            @relation(fields: [userId], references: [id])
+  items     WatchlistItem[]
+  alertRules AlertRule[]
+
+  @@map("watchlists")
+}
+
+model WatchlistItem {
+  id          String   @id @default(cuid())
+  watchlistId String   @map("watchlist_id")
+  entityType  String   @map("entity_type") // security, sector, agency, theme, catalyst_type
+  entityId    String   @map("entity_id")
+  addedAt     DateTime @default(now()) @map("added_at")
+
+  watchlist Watchlist @relation(fields: [watchlistId], references: [id])
+
+  @@map("watchlist_items")
+}
+
+model AlertRule {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  watchlistId  String?  @map("watchlist_id")
+  channel      String   @default("email")
+  thresholds   Json
+  cadence      String   @default("daily") // daily, immediate
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user      User      @relation(fields: [userId], references: [id])
+  watchlist Watchlist? @relation(fields: [watchlistId], references: [id])
+
+  @@map("alert_rules")
+}
+
+model Notification {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  opportunityId  String   @map("opportunity_id")
+  type           String   // digest, immediate_alert, invalidation
+  status         String   @default("pending") // pending, sent, failed, bounced, opened, clicked
+  idempotencyKey String   @unique @map("idempotency_key")
+  sentAt         DateTime? @map("sent_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user        User        @relation(fields: [userId], references: [id])
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+
+  @@map("notifications")
+}
+
+// ─── Admin & Audit ───
+
+model ReviewAction {
+  id            String   @id @default(cuid())
+  opportunityId String   @map("opportunity_id")
+  actorId       String   @map("actor_id")
+  action        String   // approve, approve_publish, reject, edit, merge, request_evidence, mark_promotional, escalate_legal, suppress, invalidate
+  beforeJson    Json?    @map("before_json")
+  afterJson     Json?    @map("after_json")
+  reason        String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+  actor       User        @relation(fields: [actorId], references: [id])
+
+  @@map("review_actions")
+}
+
+model IngestionRun {
+  id          String    @id @default(cuid())
+  sourceId    String    @map("source_id")
+  status      String    @default("running") // running, completed, failed
+  cursorJson  Json?     @map("cursor_json")
+  countsJson  Json?     @map("counts_json")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  completedAt DateTime? @map("completed_at")
+  errorJson   Json?     @map("error_json")
+
+  source Source @relation(fields: [sourceId], references: [id])
+
+  @@map("ingestion_runs")
+}

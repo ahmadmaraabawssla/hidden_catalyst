@@ -1,0 +1,16 @@
+{
+  "name": "@hidden-catalyst/config",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@hidden-catalyst/tsconfig": "workspace:*",
+    "typescript": "^5.5.0"
+  }
+}

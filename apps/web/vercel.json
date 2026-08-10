@@ -1,0 +1,16 @@
+{
+  "buildCommand": "cd ../.. && pnpm install --frozen-lockfile && cd apps/web && pnpm prisma generate && pnpm build",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "framework": "nextjs",
+  "outputDirectory": ".next",
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "0 */2 * * *"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production",
+    "NEXT_PUBLIC_APP_URL": "https://hidden-catalyst.vercel.app"
+  }
+}

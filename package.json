@@ -1,0 +1,21 @@
+{
+  "name": "hidden-catalyst",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "db:generate": "turbo db:generate",
+    "db:migrate": "turbo db:migrate",
+    "db:seed": "turbo db:seed",
+    "clean": "turbo clean"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "devDependencies": {
+    "turbo": "^2.10.8"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  }
+}
