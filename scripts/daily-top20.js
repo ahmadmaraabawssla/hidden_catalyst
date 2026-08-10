@@ -313,9 +313,10 @@ async function main() {
         ? `${co.ticker}: ${extraction.hiddenAngle.claim.slice(0, 80)}`
         : `${co.display_name} (${co.ticker}) — ${co.formType}`);
 
-    const summary = extraction
-      ? `[AI] ${co.display_name} (${co.ticker}) filed ${co.formType} on ${co.filingDate}. ${extraction.eventSummary}`
-      : `${co.display_name} (${co.ticker}) filed ${co.formType} on ${co.filingDate}.`;
+    const summary = extraction?.whyItMatters
+      || (extraction
+        ? `${co.display_name} (${co.ticker}) filed ${co.formType} on ${co.filingDate}. ${extraction.eventSummary}`
+        : `${co.display_name} (${co.ticker}) filed ${co.formType} on ${co.filingDate}.`);
 
     try {
       await client.query(
@@ -398,6 +399,26 @@ async function main() {
           await client.query(
             'INSERT INTO risks(id,opportunity_id,risk_type,severity,description,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
             ['rf_' + rf.type + '_' + hash, 'o_' + hash, rf.type, rf.severity, rf.description]
+          );
+        }
+      }
+
+      // v3: Missing Information (not contradictions — stored as risks with type 'missing_info')
+      if (extraction?.missingInfo && extraction.missingInfo.length > 0) {
+        for (let j = 0; j < extraction.missingInfo.length; j++) {
+          await client.query(
+            'INSERT INTO risks(id,opportunity_id,risk_type,severity,description,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
+            ['mi_' + j + '_' + hash, 'o_' + hash, 'missing_info', 'low', extraction.missingInfo[j]]
+          );
+        }
+      }
+
+      // v3: Open Questions — stored as invalidation rules for tracking
+      if (extraction?.openQuestions && extraction.openQuestions.length > 0) {
+        for (let j = 0; j < extraction.openQuestions.length; j++) {
+          await client.query(
+            'INSERT INTO invalidation_rules(id,opportunity_id,rule_type,definition,status,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
+            ['oq_' + j + '_' + hash, 'o_' + hash, 'open_question', JSON.stringify({ question: extraction.openQuestions[j] }), 'open']
           );
         }
       }
