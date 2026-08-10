@@ -30,13 +30,6 @@ export async function getPublishedOpportunities({
 }) {
   const where: Prisma.OpportunityWhereInput = { status };
 
-  // Filter by verification status (candidate, verified, etc.)
-  if (verificationStatus) {
-    where.verificationStatus = Array.isArray(verificationStatus)
-      ? { in: verificationStatus }
-      : verificationStatus;
-  }
-
   // Core filter: proper exchanges only
   where.security = {
     active: true,
@@ -71,6 +64,7 @@ export async function getPublishedOpportunities({
       scores: true,
       risks: true,
       claims: { where: { claimType: { in: ['verified_fact', 'inference'] } }, take: 3 },
+      invalidationRules: { where: { status: { in: ['monitoring', 'open'] } }, take: 10 },
       _count: { select: { claims: true } },
     },
     orderBy: { publishedAt: 'desc' },
@@ -96,15 +90,23 @@ export async function getPublishedOpportunities({
 
   // DEFAULT: Filter out mega-caps (>$10B with known market cap) unless user
   // explicitly requested a larger range. Companies with NULL market caps stay.
+  let filtered = allOpportunities;
   if (!marketCapMax || marketCapMax <= 10_000_000_000) {
-    const filtered = allOpportunities.filter(o => {
+    filtered = allOpportunities.filter(o => {
       const mc = o.security.marketCap;
       return mc === null || mc <= 10_000_000_000;
     });
-    return { opportunities: filtered.slice(offset, offset + limit), total: filtered.length };
   }
 
-  return { opportunities: allOpportunities.slice(offset, offset + limit), total };
+  // Filter by verification status in memory (Prisma client not regenerated)
+  if (verificationStatus) {
+    const vsFilter = Array.isArray(verificationStatus) ? verificationStatus : [verificationStatus];
+    filtered = filtered.filter(o =>
+      vsFilter.includes((o as any).verificationStatus)
+    );
+  }
+
+  return { opportunities: filtered.slice(offset, offset + limit), total: filtered.length };
 }
 
 export async function getOpportunityById(id: string) {
