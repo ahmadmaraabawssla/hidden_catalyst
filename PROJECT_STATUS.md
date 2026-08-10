@@ -1,6 +1,8 @@
 # Hidden Catalyst — Project Status
 
-> Last updated: 2026-08-10
+> Last updated: 2026-08-11
+
+**DeepSeek model:** `deepseek-chat`, key `sk-c5135050d24745d09b7c2829db101716`
 
 ---
 
@@ -23,14 +25,19 @@ GitHub Actions cron ──┘         │                                     �
 
 | Feature | Status | Location |
 |---|---|---|
-| Two-pass LLM extraction (facts → hidden angle) | ✅ | `packages/engine/src/llm-extractor.js` |
-| Industry profiles (BDC, Bank, Biotech, SaaS, Industrial) | ✅ | `packages/engine/src/llm-extractor.js` |
+| Two-pass LLM extraction (facts → hidden angle) | ✅ v2.1 | `packages/engine/src/llm-extractor.js` |
+| Industry profiles (BDC, Bank, Biotech, SaaS, Industrial, General) | ✅ | `packages/engine/src/llm-extractor.js` |
 | Qualification gate (REJECTED/WATCH/CANDIDATE/VERIFIED) | ✅ | `scripts/daily-top20.js` |
 | Company Attention + Catalyst Attention scores | ✅ | `scripts/daily-top20.js` |
 | Hidden angle storage with evidence/confidence | ✅ | `opportunities.hidden_angle` (JSONB) |
+| Verification confidence: ≥0.85 verified, 0.7-0.85 candidate, <0.7 watch | ✅ | `llm-extractor.js` |
 | Contradiction search | ✅ | LLM prompt + `risks` table (type: contradiction) |
-| What-to-watch signals | ✅ | `invalidation_rules` table |
-| Rejection rate ~60% (12/20 rejected in latest run) | ✅ | Pipeline verified |
+| What-to-watch with specific thresholds & contract terms | ✅ v2.1 | LLM prompt + `invalidation_rules` table |
+| Insight titles from LLM (one-line discovery summary) | ✅ v4d | `llm-extractor.js` |
+| Company context enrichment (recent 8-K history) | ✅ v4b | `daily-top20.js` |
+| Cross-Document Resolution engine (CDR) | ✅ v4a | `packages/engine/src/cdr.js` |
+| Term extractor (minimum price, commitment fee, etc.) | ✅ v4a | `packages/engine/src/term-extractor.js` |
+| Rejection rate ~60% (11/20 rejected in latest run) | ✅ | Pipeline verified |
 
 ### Market Data
 
@@ -42,13 +49,14 @@ GitHub Actions cron ──┘         │                                     �
 | Post-merger stale cap correction (15-50% diff) | ✅ | `scripts/fmp-updater.js` Step 2 |
 | Foreign currency filter (>$3T = non-USD) | ✅ | `scripts/fmp-updater.js` |
 | Manual override protection (`mc_manual` flag) | ✅ | `securities.attributes` JSONB |
+| FMP 1D/5D/20D returns on detail page | ✅ v4c | `apps/web/src/app/opportunities/[id]/page.tsx` |
 
 ### Frontend
 
 | Feature | Status | Location |
 |---|---|---|
-| Opportunity Feed (20 opps, sort/filter) | ✅ | `apps/web/src/app/feed/page.tsx` |
-| Opportunity Detail (PRD hierarchy) | ✅ | `apps/web/src/app/opportunities/[id]/page.tsx` |
+| Opportunity Feed (21 opps, compact cards, 10s scan) | ✅ | `apps/web/src/app/feed/page.tsx` |
+| Opportunity Detail (PRD hierarchy with market context) | ✅ v3 | `apps/web/src/app/opportunities/[id]/page.tsx` |
 | ScoreDrilldown (expandable sub-scores) | ✅ | `packages/ui/src/ScoreDrilldown.tsx` |
 | Admin Dashboard with Run Discovery button | ✅ | `apps/web/src/app/admin/` |
 | Run Discovery with custom filters (POST /api/admin/run-discovery) | ✅ | `apps/web/src/app/api/admin/run-discovery/` |
@@ -72,17 +80,17 @@ GitHub Actions cron ──┘         │                                     �
 
 | Feature | Why it matters | Effort |
 |---|---|---|
-| Real FMP historical price data for Price Reaction score | Currently uses LLM estimate, not actual market data | Small — `fmpGet(/historical-price-eod/light)` already exists |
+| CDR exhibit download (EX-10.x from 8-K) | CDR finds the filing but can't download actual agreement exhibits | Small — parse EX-10 refs, download linked files |
+| Compute Price Reaction from FMP historical data | Currently uses LLM estimate or null, need real market data | Small — `fmpGet(/historical-price-eod/light)` exists |
 | Hierarchical comparable matching (Level 1-4) | Better historical context for users | Medium — needs DB + matching engine |
 | GitHub Actions DEEPSEEK_API_KEY secret | Daily cron won't work without correct key | Trivial — user action |
-| Feed card bug: hidden angle not populated for old opps | Old opportunities don't show hidden angle on feed cards | Small — needs backfill or null-safe display |
 
 ### P2 — Medium Priority
 
 | Feature | Why it matters | Effort |
 |---|---|---|
 | Sector-adjusted returns | Better "Not Priced In" evidence | Medium — needs sector ETF data |
-| Analyst/institutional data in company header | Context for information asymmetry | Small — already in `securities.attributes` |
+| Filing day price reaction auto-computation | Store actual 1D/5D/20D returns at opportunity creation | Small — wire FMP into daily-top20 |
 | Relationship graph expansion | Supplier/customer/partner discovery | Large — needs LLM + SEC cross-referencing |
 | Feed mobile optimization | Feed cards need responsive pass | Small |
 | Empty states for rejected/watch opportunities | 40% of opps are rejected — should show in admin | Small |
