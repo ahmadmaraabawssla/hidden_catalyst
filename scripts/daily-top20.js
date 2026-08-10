@@ -256,7 +256,8 @@ async function main() {
       );
       await client.query(
         'INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW()) ON CONFLICT(id) DO NOTHING',
-        ['o_' + hash, co.sec_id, title, summary, 'candidate', 'verified',
+        ['o_' + hash, co.sec_id, title, summary, 'candidate',
+         extraction?.verificationStatus || 'candidate',
          extraction?.hiddenAngle ? JSON.stringify(extraction.hiddenAngle) : null,
          co.filingDate]
       );
@@ -327,12 +328,12 @@ async function main() {
         }
       }
 
-      // Publish gate — V3 qualified opps always publish (they already passed the qualification gate)
-      if (evidenceQual >= 70 && riskScore <= 65) {
+      // Publish gate — only publish if verified status
+      if (evidenceQual >= 70 && riskScore <= 65 && extraction?.verificationStatus === 'verified') {
         await client.query("UPDATE opportunities SET status='published',published_at=NOW() WHERE id=$1", ['o_' + hash]);
         published++;
-      } else {
-        // Qualified but scored too low for auto-publish — keep as candidate for review
+      } else if (extraction?.verificationStatus === 'verified' && (evidenceQual < 70 || riskScore > 65)) {
+        // LLM thinks it's verified but auto-gate disagrees — store as candidate for review
         await client.query("UPDATE opportunities SET status='candidate' WHERE id=$1", ['o_' + hash]);
       }
 
