@@ -68,8 +68,8 @@ async function main() {
     }
   }
 
-  // ═══ STEP 2: STALENESS CHECK (runs before batch update + SEC resolution) ═══
-  console.log('═══ Step 2: Staleness Check (published opps) ═══');
+  // ═══ STEP 2: STALENESS CHECK (cross-checks screener vs income statement dilution) ═══
+  console.log('═══ Step 2: Staleness Check (all published opps) ═══');
   const staleCheck = await client.query(`
     SELECT s.ticker, s.id as sec_id, s.market_cap, s.latest_price
     FROM securities s
@@ -77,7 +77,6 @@ async function main() {
     WHERE s.market_cap IS NOT NULL
       AND s.latest_price > 0
       AND (s.attributes->>'mc_manual' IS NULL OR s.attributes->>'mc_manual' != 'true')
-      AND (s.attributes->>'mc_auto' IS NULL OR s.attributes->>'mc_auto' != 'true')
   `);
 
   let staleFixed = 0;
@@ -93,10 +92,12 @@ async function main() {
     const filingDate = new Date(inc.filingDate || inc.date || '1970-01-01');
     const daysSinceFiling = Math.round((Date.now() - filingDate) / 86400000);
 
-    if (diff > 0.15 && diff < 0.50) {
+    // Auto-correct if diluted shares from latest filing differ by >10% from screener
+    // and it's not an obvious dual-class/OP-unit case (diff < 50%)
+    if (diff > 0.10 && diff < 0.50) {
       const correctedMc = diluted * sec.latest_price;
       await client.query(`UPDATE securities SET market_cap=$1, updated_at=NOW(),
-        attributes=COALESCE(attributes,'{}'::jsonb)||'{"mc_auto":true,"mc_note":"post-corp-action, diluted shares"}'::jsonb
+        attributes=COALESCE(attributes,'{}'::jsonb)||'{"mc_auto":true,"mc_note":"diluted vs screener"}'::jsonb
         WHERE id=$2`, [correctedMc, sec.sec_id]);
       console.log(`  ✏ ${sec.ticker.padEnd(6)} $${(sec.market_cap/1e9).toFixed(1)}B → $${(correctedMc/1e9).toFixed(1)}B (${Math.round(screenerShares/1e6)}M → ${Math.round(diluted/1e6)}M sh, ${daysSinceFiling}d ago)`);
       staleFixed++;
@@ -260,6 +261,36 @@ async function main() {
     console.log(`  ${updated}/${validUpdates.length} valid caps updated...`);
   }
   console.log(`  ${updated} valid caps written, ${flaggedUpdates.length} flagged (mc_review → NULL), ${secs.rows.length - validUpdates.length - flaggedUpdates.length} no screener match\n`);
+
+  // ═══ STEP 3b: RE-CHECK STALENESS (newly written screener caps may be stale) ═══
+  console.log('═══ Step 3b: Re-check Staleness (post-screener update) ═══');
+  let recheckFixed = 0;
+  for (const sec of staleCheck.rows) {
+    if (sec.latest_price <= 0) continue;
+    const incData = await fmpGet(`/income-statement?symbol=${sec.ticker}&period=quarter&limit=1`);
+    if (!Array.isArray(incData) || incData.length === 0) continue;
+    const inc = incData[0];
+    const diluted = inc.weightedAverageShsOutDil || inc.weightedAverageShsOut || 0;
+    if (diluted <= 0) continue;
+
+    // Re-read the current cap (may have been updated by batch)
+    const fresh = await client.query(`SELECT market_cap FROM securities WHERE id = $1`, [sec.sec_id]);
+    const currentMc = fresh.rows[0]?.market_cap || 0;
+    if (currentMc <= 0) continue;
+
+    const screenerShares = Math.round(currentMc / sec.latest_price);
+    const diff = Math.abs(screenerShares - diluted) / Math.max(screenerShares, diluted);
+
+    if (diff > 0.10 && diff < 0.50) {
+      const correctedMc = diluted * sec.latest_price;
+      await client.query(`UPDATE securities SET market_cap=$1, updated_at=NOW(),
+        attributes=COALESCE(attributes,'{}'::jsonb)||'{"mc_auto":true}'::jsonb WHERE id=$2`, [correctedMc, sec.sec_id]);
+      console.log(`  ✏ ${sec.ticker.padEnd(6)} $${(currentMc/1e9).toFixed(1)}B → $${(correctedMc/1e9).toFixed(1)}B (re-check)`);
+      recheckFixed++;
+    }
+    await SLEEP(250);
+  }
+  console.log(`  ${recheckFixed} additional stale caps fixed\n`);
 
   // ═══ STEP 4: ENRICH PUBLISHED OPPORTUNITIES ═══
   console.log('═══ Step 4: Analyst + Institutional + Consensus + Peers ═══');

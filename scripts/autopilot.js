@@ -1,52 +1,106 @@
 /**
- * Hidden Catalyst — Auto-Pilot Scheduler
- * 
- * Runs continuously, keeping everything updated:
- *   - Market caps (FMP) every 4 hours
- *   - SEC ingestion every 2 hours
- *   - Scoring after each ingestion batch
- * 
+ * Hidden Catalyst — Auto-Pilot Scheduler v2
+ *
+ * Daily schedule (Israel time, Asia/Jerusalem):
+ *   23:30 — Market cap refresh (fmp-updater.js)
+ *   00:01 — Discover new opportunities (daily-top20.js)
+ *
+ * On startup, waits until the next scheduled run.
+ * If today's window has passed, schedules for tomorrow.
+ *
  * Usage: node scripts/autopilot.js
- * Leave running in a terminal forever.
- * 
- * In production: replace with Vercel Cron / GitHub Actions / systemd timer.
+ * Leave running. Press Ctrl+C to stop.
  */
 
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
 
+const TZ = 'Asia/Jerusalem';
+
 function run(cmd, label) {
-  const ts = new Date().toLocaleTimeString();
+  const now = new Date();
+  const ts = now.toLocaleString('en-IL', { timeZone: TZ });
   console.log(`[${ts}] ${label}...`);
   try {
-    execSync(cmd, { cwd: ROOT, stdio: 'pipe', timeout: 600000 }); // 10 min max
-    console.log(`[${ts}] ✓ ${label} done.`);
+    execSync(cmd, { cwd: ROOT, stdio: 'pipe', timeout: 900000 }); // 15 min
+    const done = new Date().toLocaleString('en-IL', { timeZone: TZ });
+    console.log(`[${done}] OK ${label}`);
   } catch (e) {
-    console.log(`[${ts}] ⚠ ${label} failed: ${e.message.slice(0, 80)}`);
+    const fail = new Date().toLocaleString('en-IL', { timeZone: TZ });
+    console.log(`[${fail}] FAIL ${label}: ${e.message.slice(0, 80)}`);
   }
 }
 
-function schedule(fn, intervalHours) {
-  fn();
-  setInterval(fn, intervalHours * 60 * 60 * 1000);
+/**
+ * Calculate milliseconds until the next occurrence of (hour:minute)
+ * in Asia/Jerusalem timezone.
+ *
+ * Strategy: try both today and tomorrow as Date strings interpreted in
+ * the target timezone. Take whichever is in the future.
+ */
+function msUntilIsrael(hour, minute) {
+  const now = new Date();
+
+  // Build "today at hour:minute" in Israel time
+  // by creating a date string and parsing it with the timezone
+  const todayStr = now.toLocaleString('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const isoStr = `${todayStr}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+  const target = new Date(isoStr + '+03:00'); // Israel summer offset
+
+  if (target > now) {
+    return target.getTime() - now.getTime();
+  }
+
+  // Already passed — schedule for tomorrow
+  const tomorrow = new Date(target);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return tomorrow.getTime() - now.getTime();
 }
 
+function formatIsrael(date) {
+  return date.toLocaleString('en-IL', {
+    timeZone: TZ,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * Schedule a job daily at a fixed Israel time.
+ */
+function scheduleDaily(label, hour, minute, cmd) {
+  function scheduleNext() {
+    const delay = msUntilIsrael(hour, minute);
+    const nextRun = new Date(Date.now() + delay);
+
+    console.log(`  ${label.padEnd(30)} → ${formatIsrael(nextRun)}  (${Math.round(delay / 60000)} min)`);
+
+    setTimeout(() => {
+      run(cmd, label);
+      scheduleNext();
+    }, delay);
+  }
+
+  scheduleNext();
+}
+
+// ─── Main ───
+
 console.log('═══════════════════════════════════════');
-console.log('  Hidden Catalyst — Auto-Pilot');
-console.log('  Daily Top 20: every 24h (AI analysis)');
-console.log('  Market caps: every 4h (FMP)');
-console.log('  SEC pipeline: every 2h');
+console.log('  Hidden Catalyst — Auto-Pilot v2');
+console.log(`  Started: ${formatIsrael(new Date())}`);
+console.log('');
+console.log('  Daily schedule (Israel time):');
+console.log('    23:30 — Market cap refresh');
+console.log('    00:01 — Discover Top 20');
 console.log('  Press Ctrl+C to stop.');
 console.log('═══════════════════════════════════════\n');
 
-// Daily Top 20: AI-powered curated batch (DeepSeek — ~$0.02/day)
-schedule(() => run('node scripts/daily-top20.js', 'Daily Top 20 (AI)'), 24);
+scheduleDaily('Market cap update (FMP)', 23, 30, 'node scripts/fmp-updater.js');
+scheduleDaily('Daily Top 20 (AI)', 0, 1, 'node scripts/daily-top20.js');
 
-// Market caps every 4 hours
-schedule(() => run('node scripts/fmp-updater.js', 'Market cap update (FMP)'), 4);
-
-// SEC AI pipeline every 2 hours (10 companies per batch)
-schedule(() => run('node scripts/ai-pipeline.js 10', 'SEC AI pipeline'), 2);
-
-console.log('Auto-pilot running. Next market cap update in 4h, next SEC pull in 2h.\n');
+console.log('\nAuto-pilot running. Waiting for next scheduled job...\n');
