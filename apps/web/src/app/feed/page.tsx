@@ -195,23 +195,6 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
             </span>
           </a>
         ))}
-          <a
-            key={t.key}
-            href={`/feed?tab=${t.key}&sort=${sort}`}
-            className={`px-4 py-2.5 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
-              tab === t.key
-                ? 'border-brand-600 text-brand-700 bg-brand-50/50'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            {t.label}
-            <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 ${
-              tab === t.key ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500'
-            }`}>
-              {tabItem.count}
-            </span>
-          </a>
-        ))}
       </div>
 
       <div className="flex gap-8">
