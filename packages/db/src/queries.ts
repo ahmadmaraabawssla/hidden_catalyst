@@ -5,6 +5,7 @@ import type { Prisma } from '@prisma/client';
 
 export async function getPublishedOpportunities({
   status = 'published',
+  verificationStatus,
   minScore,
   maxRisk,
   sector,
@@ -16,6 +17,7 @@ export async function getPublishedOpportunities({
   offset = 0,
 }: {
   status?: string;
+  verificationStatus?: string | string[];
   minScore?: number;
   maxRisk?: number;
   sector?: string;
@@ -27,6 +29,13 @@ export async function getPublishedOpportunities({
   offset?: number;
 }) {
   const where: Prisma.OpportunityWhereInput = { status };
+
+  // Filter by verification status (candidate, verified, etc.)
+  if (verificationStatus) {
+    where.verificationStatus = Array.isArray(verificationStatus)
+      ? { in: verificationStatus }
+      : verificationStatus;
+  }
 
   // Core filter: proper exchanges only
   where.security = {
