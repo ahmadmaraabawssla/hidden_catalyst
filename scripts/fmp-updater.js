@@ -253,8 +253,8 @@ async function main() {
     const daysSinceFiling = Math.round((Date.now() - filingDate) / 86400000);
 
     // Flag if screener shares differ from latest filed diluted shares by > 15%
-    // AND the filing is more than 45 days old (corporate actions likely occurred since)
-    if (diff > 0.15 && daysSinceFiling > 45) {
+    // AND the filing is more than 30 days old (corporate actions likely occurred since)
+    if (diff > 0.15 && daysSinceFiling > 30) {
       await client.query(
         `UPDATE securities SET attributes = COALESCE(attributes,'{}'::jsonb) || '{"mc_stale":true,"mc_stale_detail":"screener=${screenerShares.toLocaleString()}sh vs filed=${diluted.toLocaleString()}sh (${daysSinceFiling}d ago)"}'::jsonb
          WHERE id = $1`, [sec.sec_id]
