@@ -1,12 +1,29 @@
 import { Badge } from '@hidden-catalyst/ui';
 import { getDashboardStats, getSources } from '@hidden-catalyst/db';
-import RunPipelineButton from './RunPipelineButton';
-import RunDiscoveryButton from './RunDiscoveryButton';
+import RunFreshDiscoveryButton from './RunFreshDiscoveryButton';
 
 export const dynamic = 'force-dynamic';
 
 export default async function AdminDashboardPage() {
   const [stats, sources] = await Promise.all([getDashboardStats(), getSources()]);
+
+  // Fetch latest discovery runs via raw PG
+  let recentRuns: any[] = [];
+  try {
+    const { Client } = await import('pg');
+    const pg = new Client({ connectionString: process.env.DATABASE_URL });
+    await pg.connect();
+    const runs = await pg.query(
+      `SELECT id, status, engine_version, started_at, completed_at, target_candidates,
+              funnel_screened, funnel_filing_candidates, funnel_deep_researched,
+              funnel_qualified, funnel_rejected, funnel_watched
+       FROM discovery_runs ORDER BY started_at DESC LIMIT 5`
+    );
+    recentRuns = runs.rows;
+    await pg.end();
+  } catch {}
+
+  const lastRun = recentRuns[0];
 
   return (
     <div className="page-container">
@@ -14,10 +31,10 @@ export default async function AdminDashboardPage() {
         <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
         <div className="flex gap-3">
           <a href="/admin/review" className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-900">
-            Review Queue ({stats.needsReview})
+            Review Queue
           </a>
-          <a href="/admin/sources" className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-            Sources
+          <a href="/feed" className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+            Feed →
           </a>
         </div>
       </div>
@@ -29,48 +46,101 @@ export default async function AdminDashboardPage() {
         <StatCard label="Active Sources" value={stats.totalSources} color="text-purple-600" />
       </div>
 
-      {/* ─── AI PIPELINE CONTROLS ─── */}
+      {/* ─── DISCOVERY ENGINE ─── */}
       <div className="mb-10">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">AI Discovery Pipeline</h2>
-        <div className="card space-y-4">
-          <div className="flex items-start justify-between gap-6">
-            <div>
-              <h3 className="font-semibold text-gray-900">Daily Top 20 — Curation Engine</h3>
-              <p className="text-sm text-gray-500 mt-1">
-                Scans 500+ companies for recent material filings, selects the 20 most promising opportunities, 
-                and runs DeepSeek AI to extract event details, dollar amounts, scenarios, and overlooked reasons.
-              </p>
-              <div className="mt-2 flex gap-4 text-xs text-gray-500">
-                <span>🔍 Scans 500 companies</span>
-                <span>🤖 DeepSeek AI analysis</span>
-                <span>💰 ~$0.03 per run</span>
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">Discovery Engine</h2>
+
+        {/* Last run summary */}
+        {lastRun ? (
+          <div className="card mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-semibold text-gray-900">
+                  Last Run: {new Date(lastRun.started_at).toLocaleString()}
+                </h3>
+                <p className="text-sm text-gray-500">
+                  Engine {lastRun.engine_version} · Status: {' '}
+                  <Badge variant={lastRun.status === 'completed' ? 'success' : lastRun.status === 'running' ? 'warning' : 'default'}>
+                    {lastRun.status}
+                  </Badge>
+                </p>
               </div>
             </div>
-            <div className="flex gap-3 shrink-0">
-              <RunPipelineButton />
-              <RunDiscoveryButton />
+
+            {/* Funnel visualization */}
+            {lastRun.funnel_screened > 0 ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 text-sm">
+                  <span className="w-32 text-gray-500">Screened</span>
+                  <span className="font-mono font-bold">{lastRun.funnel_screened.toLocaleString()}</span>
+                  <span className="text-xs text-gray-400">companies</span>
+                </div>
+                <div className="flex items-center gap-3 text-sm ml-4">
+                  <span className="w-28 text-gray-400">↳ With filings</span>
+                  <span className="font-mono">{lastRun.funnel_filing_candidates}</span>
+                </div>
+                <div className="flex items-center gap-3 text-sm ml-4">
+                  <span className="w-28 text-gray-400">↳ Deep researched</span>
+                  <span className="font-mono">{lastRun.funnel_deep_researched}</span>
+                  <span className="text-xs text-gray-400">(LLM analyzed)</span>
+                </div>
+                <div className="flex items-center gap-3 text-sm ml-4 font-semibold">
+                  <span className="w-28 text-brand-700">↳ Qualified</span>
+                  <span className="font-mono text-brand-700">{lastRun.funnel_qualified}</span>
+                  <span className="text-xs text-gray-400">candidates</span>
+                </div>
+                <div className="flex items-center gap-3 text-sm ml-4">
+                  <span className="w-28 text-gray-400">↳ Rejected</span>
+                  <span className="font-mono">{lastRun.funnel_rejected}</span>
+                </div>
+                <div className="flex items-center gap-3 text-sm ml-4">
+                  <span className="w-28 text-gray-400">↳ Watch</span>
+                  <span className="font-mono">{lastRun.funnel_watched}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No funnel data available — run pending or failed.</p>
+            )}
+          </div>
+        ) : (
+          <div className="card mb-4 text-center py-8">
+            <p className="text-sm text-gray-500">No discovery runs recorded yet.</p>
+          </div>
+        )}
+
+        {/* Quick-run button */}
+        <div className="flex gap-4 items-center">
+          <RunFreshDiscoveryButton />
+          <span className="text-xs text-gray-400">
+            Runs the v3 engine: screens companies for recent filings, applies LLM analysis, performs cross-document resolution.
+            Only qualified candidates are published to the feed.
+          </span>
+        </div>
+
+        {/* Past runs */}
+        {recentRuns.length > 1 ? (
+          <div className="mt-6">
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">Recent Runs</h3>
+            <div className="space-y-1">
+              {recentRuns.slice(1).map(function(run: any) {
+                return (
+                  <div key={run.id} className="flex items-center gap-3 text-xs text-gray-500 p-2 bg-gray-50 rounded">
+                    <span>{new Date(run.started_at).toLocaleString()}</span>
+                    <Badge variant={run.status === 'completed' ? 'success' : 'default'}>{run.status}</Badge>
+                    <span>Qualified: {run.funnel_qualified}</span>
+                    <span>Screened: {run.funnel_screened}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
-
-          <div className="border-t border-gray-200 pt-4">
-            <h4 className="text-sm font-semibold text-gray-700 mb-2">How it works</h4>
-            <ol className="text-sm text-gray-600 space-y-1 list-decimal list-inside">
-              <li>System scans companies sorted by market cap (smaller = prioritized)</li>
-              <li>For each, checks SEC for recent 8-K filings (last 14 days)</li>
-              <li>Downloads the actual filing text from SEC EDGAR</li>
-              <li>DeepSeek AI reads the filing and extracts: event type, parties, dollar amounts, materiality</li>
-              <li>Calculates 6-factor Opportunity Score using the PRD formula</li>
-              <li>Auto-publishes opportunities that pass the publication gates</li>
-              <li>User-triggered "Explore More" on individual company pages uses the same AI but on-demand</li>
-            </ol>
-          </div>
-        </div>
+        ) : null}
       </div>
 
       <h2 className="text-xl font-semibold text-gray-900 mb-4">Source Connectors</h2>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {sources.map((source) => {
-          const lastRun = source.ingestionRuns[0];
+        {sources.map(function(source: any) {
+          var lastRun = source.ingestionRuns[0];
           return (
             <div key={source.id} className="card">
               <div className="flex items-center justify-between mb-2">
@@ -81,7 +151,7 @@ export default async function AdminDashboardPage() {
               </div>
               <div className="text-sm text-gray-500 space-y-1">
                 <p>Family: {source.family}</p>
-                <p>Documents: {source._count.documents}</p>
+                <p>Documents: {source._count?.documents || 0}</p>
                 {lastRun ? (
                   <p>Last run: {new Date(lastRun.startedAt).toLocaleString()}
                     {' '}— <Badge variant={lastRun.status === 'completed' ? 'success' : 'warning'}>{lastRun.status}</Badge>
@@ -101,7 +171,7 @@ export default async function AdminDashboardPage() {
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="card text-center">
-      <div className={`text-3xl font-bold ${color}`}>{value}</div>
+      <div className={'text-3xl font-bold ' + color}>{value}</div>
       <div className="text-sm text-gray-500 mt-1">{label}</div>
     </div>
   );

@@ -30,10 +30,11 @@ const UA = process.env.SEC_USER_AGENT || 'Hidden Catalyst (contact@hiddencatalys
 if (!DB) { console.error('DATABASE_URL environment variable required'); process.exit(1); }
 if (!DEEPSEEK_KEY) { console.error('DEEPSEEK_API_KEY environment variable required'); process.exit(1); }
 
-// Budget-based discovery config
-const TARGET_CANDIDATES = 20;  // output target — stop when this many qualified
-const MAX_SCAN = 500;          // max companies to screen for filings
-const MAX_DEEP_RESEARCH = 100; // max LLM calls per run
+// Budget-based discovery config (overridable via env for admin runs)
+const RUN_ID = process.env.RUN_ID || ('run_' + Date.now());
+const TARGET_CANDIDATES = parseInt(process.env.TARGET_CANDIDATES || '20');
+const MAX_SCAN = parseInt(process.env.MAX_SCAN || '500');
+const MAX_DEEP_RESEARCH = parseInt(process.env.MAX_DEEP_RESEARCH || '100');
 const LOOKBACK_DAYS = 7;
 const ENGINE_VERSION = 'v3';
 
@@ -227,8 +228,8 @@ async function main() {
 
       try {
         await client.query(
-          `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,engine_version,created_at,updated_at)
-           VALUES($1,$2,$3,$4,'rejected',$5,$6,$7,'` + ENGINE_VERSION + `',NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
+          `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,engine_version,run_id,last_researched_at,created_at,updated_at)
+           VALUES($1,$2,$3,$4,'rejected',$5,$6,$7,'` + ENGINE_VERSION + `','` + RUN_ID + `',NOW(),NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
           ['o_' + hash, co.sec_id, title,
            `[Rejected: ${reason}] ${co.display_name} filed ${co.formType} on ${co.filingDate}. No hidden angle identified.`,
            verStatus,
@@ -346,7 +347,7 @@ async function main() {
         ['e_' + hash, 'd_' + hash, (extraction?.verifiedFacts[0] || summary).slice(0, 500), 'primary', evidenceQual]
       );
       await client.query(
-        `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,price_change_pct,volume_change_pct,engine_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'` + ENGINE_VERSION + `',NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
+        `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,price_change_pct,volume_change_pct,engine_version,run_id,last_researched_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'` + ENGINE_VERSION + `','` + RUN_ID + `',NOW(),NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
         ['o_' + hash, co.sec_id, title, summary, 'candidate',
          extraction?.verificationStatus || 'candidate',
          extraction?.hiddenAngle ? JSON.stringify(extraction.hiddenAngle) : null,
