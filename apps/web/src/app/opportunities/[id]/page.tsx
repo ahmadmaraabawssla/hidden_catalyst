@@ -1,4 +1,4 @@
-import { Badge, RiskBadge, ScoreBar } from '@hidden-catalyst/ui';
+import { Badge, RiskBadge, ScoreDrilldown } from '@hidden-catalyst/ui';
 import { getOpportunityById, getOpportunityEvidence, getRelationshipGraph } from '@hidden-catalyst/db';
 import { analyzeHistoricalReactions, formatHistoricalSummary } from '@hidden-catalyst/engine';
 import { notFound } from 'next/navigation';

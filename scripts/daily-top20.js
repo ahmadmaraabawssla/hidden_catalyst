@@ -256,7 +256,7 @@ async function main() {
       );
       await client.query(
         'INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW()) ON CONFLICT(id) DO NOTHING',
-        ['o_' + hash, co.sec_id, title, summary, 'candidate', 'candidate',
+        ['o_' + hash, co.sec_id, title, summary, 'candidate', 'verified',
          extraction?.hiddenAngle ? JSON.stringify(extraction.hiddenAngle) : null,
          co.filingDate]
       );
