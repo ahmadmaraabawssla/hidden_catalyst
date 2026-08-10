@@ -68,8 +68,45 @@ async function main() {
     }
   }
 
-  // ═══ STEP 2: BATCH UPDATE MARKET CAPS ═══
-  console.log('═══ Step 2: Update Market Caps ═══');
+  // ═══ STEP 2: STALENESS CHECK (runs before batch update + SEC resolution) ═══
+  console.log('═══ Step 2: Staleness Check (published opps) ═══');
+  const staleCheck = await client.query(`
+    SELECT s.ticker, s.id as sec_id, s.market_cap, s.latest_price
+    FROM securities s
+    JOIN opportunities o ON o.security_id = s.id AND o.status = 'published'
+    WHERE s.market_cap IS NOT NULL
+      AND s.latest_price > 0
+      AND (s.attributes->>'mc_manual' IS NULL OR s.attributes->>'mc_manual' != 'true')
+      AND (s.attributes->>'mc_auto' IS NULL OR s.attributes->>'mc_auto' != 'true')
+  `);
+
+  let staleFixed = 0;
+  for (const sec of staleCheck.rows) {
+    const incData = await fmpGet(`/income-statement?symbol=${sec.ticker}&period=quarter&limit=1`);
+    if (!Array.isArray(incData) || incData.length === 0) continue;
+    const inc = incData[0];
+    const diluted = inc.weightedAverageShsOutDil || inc.weightedAverageShsOut || 0;
+    if (diluted <= 0) continue;
+
+    const screenerShares = Math.round(sec.market_cap / sec.latest_price);
+    const diff = Math.abs(screenerShares - diluted) / Math.max(screenerShares, diluted);
+    const filingDate = new Date(inc.filingDate || inc.date || '1970-01-01');
+    const daysSinceFiling = Math.round((Date.now() - filingDate) / 86400000);
+
+    if (diff > 0.15 && daysSinceFiling > 30) {
+      const correctedMc = diluted * sec.latest_price;
+      await client.query(`UPDATE securities SET market_cap=$1, updated_at=NOW(),
+        attributes=COALESCE(attributes,'{}'::jsonb)||'{"mc_auto":true,"mc_note":"post-corp-action, diluted shares"}'::jsonb
+        WHERE id=$2`, [correctedMc, sec.sec_id]);
+      console.log(`  ✏ ${sec.ticker.padEnd(6)} $${(sec.market_cap/1e9).toFixed(1)}B → $${(correctedMc/1e9).toFixed(1)}B (${Math.round(screenerShares/1e6)}M → ${Math.round(diluted/1e6)}M sh, ${daysSinceFiling}d ago)`);
+      staleFixed++;
+    }
+    await SLEEP(250);
+  }
+  console.log(`  ${staleFixed} stale caps auto-corrected\n`);
+
+  // ═══ STEP 3: BATCH UPDATE MARKET CAPS ═══
+  console.log('═══ Step 3: Update Market Caps ═══');
 
   const secs = await client.query(`
     SELECT s.id, s.ticker, s.market_cap as old_cap, s.company_id
@@ -224,55 +261,8 @@ async function main() {
   }
   console.log(`  ${updated} valid caps written, ${flaggedUpdates.length} flagged (mc_review → NULL), ${secs.rows.length - validUpdates.length - flaggedUpdates.length} no screener match\n`);
 
-  // ═══ STEP 2c: STALENESS CHECK — detect caps made stale by corporate actions ═══
-  console.log('═══ Step 2c: Staleness Check (corporate actions) ═══');
-  const staleCheck = await client.query(`
-    SELECT s.ticker, s.id as sec_id, s.market_cap, s.latest_price, co.cik
-    FROM securities s
-    JOIN companies co ON co.id = s.company_id
-    JOIN opportunities o ON o.security_id = s.id AND o.status = 'published'
-    WHERE s.market_cap IS NOT NULL
-      AND (s.attributes->>'mc_manual' IS NULL OR s.attributes->>'mc_manual' != 'true')
-      AND (s.attributes->>'mc_auto' IS NULL OR s.attributes->>'mc_auto' != 'true')
-    LIMIT 30
-  `);
-
-  let staleFound = 0;
-  for (const sec of staleCheck.rows) {
-    const incData = await fmpGet(`/income-statement?symbol=${sec.ticker}&period=quarter&limit=1`);
-    if (!Array.isArray(incData) || incData.length === 0) continue;
-
-    const inc = incData[0];
-    const diluted = inc.weightedAverageShsOutDil || inc.weightedAverageShsOut || 0;
-    const price = sec.latest_price || 0;
-    if (diluted <= 0 || price <= 0) continue;
-
-    const screenerShares = Math.round(sec.market_cap / price);
-    const diff = Math.abs(screenerShares - diluted) / Math.max(screenerShares, diluted);
-    const filingDate = new Date(inc.filingDate || inc.date || '1970-01-01');
-    const daysSinceFiling = Math.round((Date.now() - filingDate) / 86400000);
-
-    // Flag if screener shares differ from latest filed diluted shares by > 15%
-    // AND the filing is more than 30 days old (corporate actions likely occurred since)
-    if (diff > 0.15 && daysSinceFiling > 30) {
-      // Auto-correct: use diluted shares × current price
-      const correctedMc = diluted * price;
-      await client.query(
-        `UPDATE securities SET market_cap = $1, updated_at = NOW(),
-             attributes = COALESCE(attributes,'{}'::jsonb) || $2::jsonb
-         WHERE id = $3`,
-        [correctedMc, JSON.stringify({ mc_auto: true, mc_note: `post-corp-action ${daysSinceFiling}d ago, screener ${Math.round(screenerShares / 1e6)}M → diluted ${Math.round(diluted / 1e6)}M` }), sec.sec_id]
-      );
-      console.log(`  ✏ ${sec.ticker.padEnd(6)} $${(sec.market_cap/1e9).toFixed(1)}B → $${(correctedMc/1e9).toFixed(1)}B (${Math.round(screenerShares/1e6)}M → ${Math.round(diluted/1e6)}M sh, ${daysSinceFiling}d since filing)`);
-      staleFound++;
-    }
-    await SLEEP(250);
-  }
-  console.log(`  ${staleFound} stale caps auto-corrected\n`);
-
-  // ═══ STEP 3: ENRICH PUBLISHED OPPORTUNITIES ═══
-  console.log('═══ Step 3: Analyst + Institutional + Consensus + Peers ═══');
-
+  // ═══ STEP 4: ENRICH PUBLISHED OPPORTUNITIES ═══
+  console.log('═══ Step 4: Analyst + Institutional + Consensus + Peers ═══');
   const oppTickers = await client.query(`
     SELECT DISTINCT s.ticker, s.id as sec_id
     FROM opportunities o JOIN securities s ON s.id = o.security_id
