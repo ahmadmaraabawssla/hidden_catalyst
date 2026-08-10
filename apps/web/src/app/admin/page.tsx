@@ -1,6 +1,7 @@
 import { Badge } from '@hidden-catalyst/ui';
 import { getDashboardStats, getSources } from '@hidden-catalyst/db';
 import RunPipelineButton from './RunPipelineButton';
+import RunDiscoveryButton from './RunDiscoveryButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,7 +46,10 @@ export default async function AdminDashboardPage() {
                 <span>💰 ~$0.03 per run</span>
               </div>
             </div>
-            <RunPipelineButton />
+            <div className="flex gap-3 shrink-0">
+              <RunPipelineButton />
+              <RunDiscoveryButton />
+            </div>
           </div>
 
           <div className="border-t border-gray-200 pt-4">
