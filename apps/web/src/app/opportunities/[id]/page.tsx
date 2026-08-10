@@ -212,8 +212,8 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           {facts.length > 0 && (
             <section className="card">
               <h2 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">Fact</span>
-                Verified Facts ({facts.length})
+                <span className="shrink-0 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">Fact</span>
+                <span>Verified Facts ({facts.length})</span>
               </h2>
               <div className="space-y-2">
                 {facts.map((f, i) => (
@@ -229,8 +229,8 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           {inferences.length > 0 && (
             <section className="card">
               <h2 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <span className="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-medium text-purple-700">Infer</span>
-                System Inferences ({inferences.length})
+                <span className="shrink-0 inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-medium text-purple-700">Infer</span>
+                <span>System Inferences ({inferences.length})</span>
               </h2>
               <div className="space-y-3">
                 {inferences.map((inf, i) => (
