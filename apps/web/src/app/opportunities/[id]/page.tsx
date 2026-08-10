@@ -493,6 +493,64 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             </section>
           )}
 
+          {/* ── RESEARCH COMPLETENESS ── */}
+          <section className="card">
+            <h2 className="text-base font-semibold text-gray-900 mb-3">Research Completeness</h2>
+            {(() => {
+              const checks = [
+                { label: 'Primary source verified', ok: facts.length > 0 },
+                { label: 'Hidden angle identified', ok: !!(hiddenAngle?.claim) },
+                { label: 'Defined terms resolved', ok: facts.some((f: any) => f.text && f.text.includes('[Ref:')) },
+                { label: 'Financial materiality', ok: hiddenAngle?.cashExposure?.amount != null ? 'partial' : false },
+                { label: 'Capital structure', ok: hiddenAngle?.capitalOverhang != null },
+                { label: 'Price reaction computed', ok: opp.priceChangePercent != null },
+                { label: 'Catalyst attention measured', ok: false }, // v4e not yet populated in DB
+                { label: 'Contradiction search', ok: contradictions.length > 0 },
+                { label: 'Historical comparables', ok: historicalSummary != null && !historicalSummary.includes('Insufficient') },
+                { label: 'Monitoring triggers set', ok: whatToWatch.length > 0 },
+              ];
+              const countOk = checks.filter(c => c.ok === true).length;
+              const countPartial = checks.filter(c => c.ok === 'partial').length;
+              const pct = Math.round(((countOk + countPartial * 0.5) / checks.length) * 100);
+              return (
+                <div>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="text-2xl font-bold text-gray-900">{pct}%</div>
+                    <div className="flex-1 bg-gray-200 rounded-full h-2.5">
+                      <div
+                        className="bg-brand-500 h-2.5 rounded-full transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    {checks.map((c, i) => (
+                      <div key={i} className="flex items-center gap-2 text-sm">
+                        <span className={
+                          c.ok === true ? 'text-green-500' :
+                          c.ok === 'partial' ? 'text-amber-400' :
+                          'text-gray-300'
+                        }>
+                          {c.ok === true ? '✓' : c.ok === 'partial' ? '◐' : '✗'}
+                        </span>
+                        <span className={
+                          c.ok === true ? 'text-gray-700' :
+                          c.ok === 'partial' ? 'text-amber-700' :
+                          'text-gray-400'
+                        }>
+                          {c.label}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-3">
+                    Research Completeness ≠ Opportunity Score. An opportunity may score high but be under-researched.
+                  </p>
+                </div>
+              );
+            })()}
+          </section>
+
           {/* ── EVIDENCE CHAIN ── */}
           {evidence.length > 0 && (
             <section className="card">

@@ -97,23 +97,24 @@ async function downloadFilingText(cik, acc) {
     });
     if (!r.ok) return null;
     var fullText = await r.text();
-    var textStart = fullText.indexOf('<TEXT>');
-    if (textStart < 0) return null;
-    var cleanText = fullText
-      .slice(textStart + 6)
+
+    // First, extract defined terms from the COMPLETE submission (includes exhibits)
+    // The full .txt submission contains all exhibits concatenated
+    var rawClean = fullText
       .replace(/<[^>]+>/g, ' ')
       .replace(/&#[0-9]+;/gi, ' ')
       .replace(/&[a-z]+;/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
-    // ── Exhibit Download: parse EX-10/EX-4 references and download ──
+    // Also try to find and download individual exhibits
     var exhibitText = await downloadExhibits(fullText, cik, accNoDash);
-    if (exhibitText) {
-      cleanText = cleanText + '\n\n===EXHIBIT CONTENT===\n' + exhibitText;
-    }
 
-    return cleanText;
+    // Combine: raw clean text (has exhibits) + any downloaded exhibits
+    var combined = rawClean.slice(0, 50000);
+    if (exhibitText) combined = combined + '\n\n===EXHIBIT DOWNLOAD===\n' + exhibitText;
+
+    return combined;
   } catch (e) {
     return null;
   }
@@ -125,7 +126,7 @@ async function downloadFilingText(cik, acc) {
 async function downloadExhibits(fullFilingText, cik, accNoDash) {
   try {
     // Find exhibit filenames: <FILENAME>ex10-4.htm</FILENAME> etc.
-    var exhibitPattern = /<FILENAME>(ex(?:10|4|2|99)[^.\\/]*(?:\.htm|\.html|\.txt))<\/FILENAME>/gi;
+    var exhibitPattern = /<FILENAME>\s*(ex(?:10|4|2|99)[^<]*(?:\.htm|\.html|\.txt))\s*<\/FILENAME>/gi;
     var filenames = [];
     var m;
     while ((m = exhibitPattern.exec(fullFilingText)) !== null) {
@@ -205,7 +206,15 @@ async function resolveDefinedTerms(amendmentText, cik) {
     var text = await downloadFilingText(cik, filing.acc);
     if (!text) continue;
 
-    var terms = extractDefinedTerms(text.slice(0, 20000));
+    var terms = extractDefinedTerms(text.slice(0, 60000));
+    if (Object.keys(terms).length === 0) {
+      // Try the second half — exhibits are often later in the submission
+      var secondHalf = text.slice(30000, 90000);
+      if (secondHalf.length > 1000) {
+        var terms2 = extractDefinedTerms(secondHalf);
+        Object.keys(terms2).forEach(function(k) { terms[k] = terms2[k]; });
+      }
+    }
     console.log('    [CDR] Extracted terms: ' + JSON.stringify(terms).slice(0, 200));
 
     // Merge terms

@@ -16,6 +16,7 @@
 const { Client } = require('pg');
 const { setApiKey, extractFromFiling } = require('../packages/engine/src/llm-extractor');
 const { measureAttention } = require('../packages/engine/src/catalyst-attention');
+const { resolveDefinedTerms } = require('../packages/engine/src/cdr');
 
 // ALL secrets from environment variables ONLY
 const DB = process.env.DATABASE_URL;
@@ -180,6 +181,18 @@ async function main() {
           // Check for merger/financing keywords
           if (companyContext.match(/8-K.*8-K.*8-K/i) && companyContext.match(/acquisition|merger|financing|offering|equity|ELOC|warrant/i)) {
             companyContext += ' NOTE: Recent multiple 8-Ks suggest active corporate events (merger, financing, etc). Exercise caution with share count and market cap calculations.';
+          }
+
+          // ── Cross-Document Resolution: if filing references prior agreements ──
+          if (filingText.length > 200 && filingText.match(/purchase\s+agreement|defined\s+in\s+the|amends\s+the|as\s+defined|referenced\s+in/i)) {
+            try {
+              console.log(`  [CDR] Running cross-document resolution for ${co.ticker}...`);
+              const cdrResult = await resolveDefinedTerms(filingText, cik);
+              if (cdrResult.context) {
+                companyContext += '\n\nCROSS-DOCUMENT RESOLVED TERMS:\n' + cdrResult.context.slice(0, 1500);
+                console.log(`  [CDR] ${co.ticker}: resolved ${Object.keys(cdrResult.terms).length} terms: ${JSON.stringify(cdrResult.terms).slice(0, 150)}`);
+              }
+            } catch (cdrErr) { /* CDR is best-effort */ }
           }
         }
       }

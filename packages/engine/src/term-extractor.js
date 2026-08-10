@@ -5,20 +5,29 @@
 function extractDefinedTerms(text) {
   var terms = {};
 
-  // 1. "$0.39912 (the Minimum Price)" — most common pattern in SEC filings
-  var minPriceRe = /\$([\d.]+)\s*[^.]{0,80}?(?:minimum|nasdaq\s+minimum)\s*(?:price|bid\s+price)/gi;
+  // 1. "$0.39912 (the Minimum Price)" — stock-price values in SEC filings
+  // Prefer values with 2+ decimal places (stock prices: $0.39912, $12.50), not whole numbers
+  var minPriceRe = /\$([\d]+\.[\d]{2,})\s*[^.]{0,80}?(?:minimum|nasdaq\s+minimum)\s*(?:price|bid\s+price)/gi;
   var m;
   while ((m = minPriceRe.exec(text)) !== null) {
     var v = parseFloat(m[1].replace(/,/g, ''));
-    if (v > 0 && v < 10000) { terms['minimum_price'] = v; break; }
+    if (v > 0.01 && v < 10000) { terms['minimum_price'] = v; break; }
   }
-
-  // 1b. Also try "Minimum Price" ... "$0.39912" (reverse order)
+  // Fallback: any $X pattern near minimum price
   if (!terms['minimum_price']) {
-    var mpRe2 = /(?:minimum|nasdaq\s+minimum)\s*(?:price|bid\s+price)[^.]{0,80}?\$([\d.]+)/gi;
-    while ((m = mpRe2.exec(text)) !== null) {
-      var v1b = parseFloat(m[1].replace(/,/g, ''));
-      if (v1b > 0 && v1b < 10000) { terms['minimum_price'] = v1b; break; }
+    var minPriceRe2 = /\$([\d.]+)\s*[^.]{0,80}?(?:minimum|nasdaq\s+minimum)\s*(?:price|bid\s+price)/gi;
+    while ((m = minPriceRe2.exec(text)) !== null) {
+      var v2 = parseFloat(m[1].replace(/,/g, ''));
+      if (v2 > 0.001 && v2 < 100 && v2 !== Math.floor(v2)) { terms['minimum_price'] = v2; break; }
+      if (v2 > 0.001 && v2 < 10000 && m[0].indexOf(',') < 0) { terms['minimum_price'] = v2; break; }
+    }
+  }
+  // Last resort: no $ prefix (HTML entity stripping may separate it)
+  if (!terms['minimum_price']) {
+    var minPriceRe3 = /([\d]+\.[\d]{2,})\s*[^.]{0,80}?(?:minimum|nasdaq\s+minimum)\s*(?:price|bid\s+price)/gi;
+    while ((m = minPriceRe3.exec(text)) !== null) {
+      var v3 = parseFloat(m[1].replace(/,/g, ''));
+      if (v3 > 0.01 && v3 < 1000) { terms['minimum_price'] = v3; break; }
     }
   }
 
