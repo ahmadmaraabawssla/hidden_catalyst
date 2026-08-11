@@ -32,6 +32,21 @@ function verStatusLabel(s: string | null): { label: string; color: string } {
   }
 }
 
+// Compute research completeness from available data (fallback when cluster/scores missing)
+function completenessFromData(facts: any[], ha: any, contradictions: any[], watch: any[], questions: any[], priceChange: any): number {
+  let ok = 0, partial = 0;
+  if (facts?.length > 0) ok++;
+  if (ha?.claim) ok++;
+  if (contradictions?.length > 0) ok++;
+  if (watch?.length > 0) ok++;
+  if (priceChange != null) ok++;
+  if (ha?.cashExposure?.amount) partial++;
+  if (ha?.capitalOverhang) partial++;
+  if (ha?.dilutionExposure) partial++;
+  if (questions?.length > 0) partial++;
+  return Math.round(((ok + partial * 0.5) / 9) * 100);
+}
+
 // ─── Page ───
 
 export default async function OpportunityDetailPage({ params }: { params: { id: string } }) {
@@ -169,10 +184,18 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const adversarial = clusterContext?.adversarial_json || null;
   const comparable = clusterContext?.comparable_json || null;
   const monitoringEvents = clusterContext?.monitoring_events || [];
-  const researchCompleteness =
-    Math.round(clusterContext?.research_completeness ?? clusterContext?.researchCompleteness ?? scores.research_completeness ?? 0);
-  const researchConfidence =
-    Math.round(clusterContext?.research_confidence ?? clusterContext?.researchConfidence ?? scores.research_confidence ?? 0);
+  // DB column > cluster context > computed from available evidence
+  const researchCompleteness = Math.round(
+    (opp as any).research_completeness ??
+    clusterContext?.research_completeness ??
+    clusterContext?.researchCompleteness ??
+    completenessFromData(facts, hiddenAngle, contradictions, whatToWatch, openQuestions, opp.priceChangePercent)
+  );
+  const researchConfidence = Math.round(
+    clusterContext?.research_confidence ??
+    clusterContext?.researchConfidence ??
+    (hiddenAngle?.confidence ? hiddenAngle.confidence * 100 : 0)
+  );
 
   return (
     <div className="page-container">
@@ -288,9 +311,13 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 {clusterContext?.cluster_status || verificationStatus}
               </Badge>
             </div>
-            <p className="text-xs text-gray-500">
-              Priority {Math.round(clusterContext?.priority_score ?? scores.research_priority ?? scores.opportunity ?? 0)} · {clusterSignals.length} linked signals
-            </p>
+            {clusterContext ? (
+              <p className="text-xs text-gray-500">
+                Priority {Math.round(clusterContext?.priority_score ?? scores.opportunity ?? 0)} · {clusterSignals.length} linked signals
+              </p>
+            ) : (
+              <p className="text-xs text-gray-400">Canonical signal/cluster pending — see facts below</p>
+            )}
           </div>
         </div>
 

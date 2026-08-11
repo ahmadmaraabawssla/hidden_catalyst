@@ -432,129 +432,56 @@ async function main() {
         ? `${co.display_name} (${co.ticker}) filed ${co.formType} on ${co.filingDate}. ${extraction.eventSummary}`
         : `${co.display_name} (${co.ticker}) filed ${co.formType} on ${co.filingDate}.`);
 
+    // ── Deterministic qualification gate ──
+    const gateResult = applyQualificationGate({
+      verifiedFacts: extraction?.verifiedFacts || [],
+      hiddenAngle: extraction?.hiddenAngle || {},
+      contradictions: extraction?.contradictions || [],
+      financialMateriality: extraction?.financialMateriality || {},
+      inferences: extraction?.inferences || [],
+      whatToWatch: extraction?.whatToWatch || [],
+      openQuestions: extraction?.openQuestions || [],
+      priceReactionPct,
+    });
+    const determinedStatus = gateResult.status;
+    console.log(`  [Gate] ${co.ticker}: ${determinedStatus}${gateResult.reasons.length ? ' — ' + gateResult.reasons.join(', ') : ''}`);
+
+    // ── Write through canonical path: Document → Signal → Cluster → Opportunity ──
     try {
-      await client.query(
-        'INSERT INTO documents(id,source_id,canonical_url,published_at,retrieved_at,content_hash,title,text,created_at) VALUES($1,$2,$3,$4,NOW(),$5,$6,$7,NOW()) ON CONFLICT(content_hash) DO NOTHING',
-        ['d_' + hash, 'source_sec_edgar', `https://www.sec.gov/cgi-bin/browse-edgar?CIK=${co.cik}`, co.filingDate, hash, title, summary]
-      );
-      await client.query(
-        'INSERT INTO evidence_items(id,document_id,excerpt,evidence_type,quality_score,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
-        ['e_' + hash, 'd_' + hash, (extraction?.verifiedFacts[0] || summary).slice(0, 500), 'primary', evidenceQual]
-      );
-      const visibleStatus = ['candidate', 'verified'].includes(extraction?.verificationStatus) ? 'published' : 'candidate';
-      await client.query(
-        `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,price_change_pct,volume_change_pct,engine_version,run_id,last_researched_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'` + ENGINE_VERSION + `','` + RUN_ID + `',NOW(),NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
-        ['o_' + hash, co.sec_id, title, summary, visibleStatus,
-         extraction?.verificationStatus || 'candidate',
-         extraction?.hiddenAngle ? JSON.stringify(extraction.hiddenAngle) : null,
-         co.filingDate,
-         priceReactionPct,
-         volumeReactionPct]
-      );
-      await client.query(
-        'INSERT INTO claims(id,opportunity_id,claim_type,text,confidence,evidence_item_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT(id) DO NOTHING',
-        ['cf_' + hash, 'o_' + hash, 'verified_fact', (extraction?.verifiedFacts[0] || `${co.ticker}: ${co.formType} ${co.filingDate}`).slice(0, 500), extraction?.confidence || 0.9, JSON.stringify(['e_' + hash])]
-      );
+      const scoreObj = { opportunity: oppScore, information_asymmetry: infoAsym, company_attention: companyAttn,
+        catalyst_attention: catalystAttn, catalyst_strength: catalystStr, evidence_quality: evidenceQual,
+        financial_materiality: finMateriality, timing: timing, price_reaction: priceReaction, risk: riskScore };
+      await writeCanonicalOpportunity(client, {
+        runId: RUN_ID, engineVersion: ENGINE_VERSION, hash,
+        cik: co.cik, accessionNumber: co.accessionNumber,
+        ticker: co.ticker, displayName: co.display_name, secId: co.sec_id,
+        formType: co.formType, filingDate: co.filingDate,
+        title, summary, verificationStatus: determinedStatus,
+        hiddenAngle: extraction?.hiddenAngle || null,
+        verifiedFacts: extraction?.verifiedFacts || [],
+        inferences: extraction?.inferences || [],
+        contradictions: extraction?.contradictions || [],
+        missingInfo: extraction?.missingInfo || [],
+        openQuestions: extraction?.openQuestions || [],
+        whatToWatch: extraction?.whatToWatch || [],
+        overlookedReasons: extraction?.overlookedReasons || [],
+        riskFlags: extraction?.riskFlags || [],
+        scores: scoreObj,
+        financialMateriality: extraction?.financialMateriality || null,
+        priceReactionPct: priceReactionPct || null,
+        volumeReactionPct: volumeReactionPct || null,
+        confidence: extraction?.confidence || 0.7,
+        mc: mc,
+      });
 
-      if (extraction?.inferences) {
-        for (let j = 0; j < extraction.inferences.length; j++) {
-          await client.query(
-            'INSERT INTO claims(id,opportunity_id,claim_type,text,confidence,evidence_item_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT(id) DO NOTHING',
-            [`ci${j}_${hash}`, 'o_' + hash, 'inference', extraction.inferences[j].text, extraction.inferences[j].confidence, JSON.stringify(['e_' + hash])]
-          );
-        }
-      }
-
-      // Scores — simpler loop to avoid destructuring issues
-      var scoreRows = [['opportunity', oppScore], ['information_asymmetry', infoAsym], ['company_attention', companyAttn], ['catalyst_attention', catalystAttn], ['catalyst_strength', catalystStr], ['evidence_quality', evidenceQual], ['financial_materiality', finMateriality], ['timing', timing], ['price_reaction', priceReaction], ['risk', riskScore]];
-      for (var si = 0; si < scoreRows.length; si++) {
-        var st = scoreRows[si][0];
-        var sv = scoreRows[si][1];
-        await client.query(
-          'INSERT INTO scores(id,opportunity_id,score_type,value,factors,model_version,calculated_at) VALUES($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT(id) DO NOTHING',
-          ['s_' + st + '_' + hash, 'o_' + hash, st, sv, JSON.stringify({ mc: mc, pipeline: 'daily-top20-v3' }), '3.0.0']
-        );
-      }
-
-      await storeSignalAndCluster(client, co, extraction, hash, evidenceQual, oppScore);
-      await client.query(
-        "UPDATE opportunities SET cluster_id=$1, research_completeness=$2 WHERE id=$3",
-        ['cl_' + hash, Math.round((extraction?.verificationConfidence || 0.7) * 100), 'o_' + hash]
-      ).catch(() => {});
-
-      // Contradictions
-      if (extraction?.contradictions && extraction.contradictions.length > 0) {
-        for (let j = 0; j < extraction.contradictions.length; j++) {
-          await client.query(
-            'INSERT INTO risks(id,opportunity_id,risk_type,severity,description,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
-            ['ct_' + j + '_' + hash, 'o_' + hash, 'contradiction', 'medium', extraction.contradictions[j]]
-          );
-        }
-      }
-
-      // What to watch
-      if (extraction?.whatToWatch && extraction.whatToWatch.length > 0) {
-        for (let j = 0; j < extraction.whatToWatch.length; j++) {
-          await client.query(
-            'INSERT INTO invalidation_rules(id,opportunity_id,rule_type,definition,status,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
-            ['wt_' + j + '_' + hash, 'o_' + hash, 'confirmation', JSON.stringify({ signal: extraction.whatToWatch[j] }), 'monitoring']
-          );
-        }
-      }
-
-      const reasons = extraction?.overlookedReasons || [
-        `Market cap of $${(mc / 1e9).toFixed(1)}B — limited analyst coverage`,
-        `${co.formType} filing — ${co.formType === '8-K' ? 'unscheduled disclosure' : 'periodic report'}`,
-      ];
-      for (let j = 0; j < reasons.length; j++) {
-        await client.query(
-          'INSERT INTO risks(id,opportunity_id,risk_type,severity,description,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
-          [`olr_${j}_${hash}`, 'o_' + hash, `overlooked_reason_${j + 1}`, 'low', reasons[j]]
-        );
-      }
-
-      if (extraction?.riskFlags) {
-        var flags = extraction.riskFlags;
-        for (var fi = 0; fi < flags.length; fi++) {
-          var rf = flags[fi];
-          await client.query(
-            'INSERT INTO risks(id,opportunity_id,risk_type,severity,description,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
-            ['rf_' + rf.type + '_' + hash, 'o_' + hash, rf.type, rf.severity, rf.description]
-          );
-        }
-      }
-
-      // v3: Missing Information (not contradictions — stored as risks with type 'missing_info')
-      if (extraction?.missingInfo && extraction.missingInfo.length > 0) {
-        for (let j = 0; j < extraction.missingInfo.length; j++) {
-          await client.query(
-            'INSERT INTO risks(id,opportunity_id,risk_type,severity,description,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
-            ['mi_' + j + '_' + hash, 'o_' + hash, 'missing_info', 'low', extraction.missingInfo[j]]
-          );
-        }
-      }
-
-      // v3: Open Questions — stored as invalidation rules for tracking
-      if (extraction?.openQuestions && extraction.openQuestions.length > 0) {
-        for (let j = 0; j < extraction.openQuestions.length; j++) {
-          await client.query(
-            'INSERT INTO invalidation_rules(id,opportunity_id,rule_type,definition,status,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
-            ['oq_' + j + '_' + hash, 'o_' + hash, 'open_question', JSON.stringify({ question: extraction.openQuestions[j] }), 'open']
-          );
-        }
-      }
-
-      // Publish gate — only publish if verified status
-      if (evidenceQual >= 70 && riskScore <= 65 && ['candidate', 'verified'].includes(extraction?.verificationStatus)) {
-        await client.query("UPDATE opportunities SET status='published',published_at=NOW() WHERE id=$1", ['o_' + hash]);
+      if (determinedStatus === 'verified' || determinedStatus === 'candidate') {
         published++;
-      } else if (['candidate', 'verified'].includes(extraction?.verificationStatus) && (evidenceQual < 70 || riskScore > 65)) {
-        // LLM thinks it's verified but auto-gate disagrees — store as candidate for review
-        await client.query("UPDATE opportunities SET status='candidate' WHERE id=$1", ['o_' + hash]);
+        console.log(`  ✅ ${co.ticker}: PUBLISHED as ${determinedStatus}`);
+      } else {
+        console.log(`  👁 ${co.ticker}: ${determinedStatus.toUpperCase()} — ${gateResult.reasons.join(', ')}`);
       }
-
     } catch (e) {
-      console.log(`  ⚠ ${co.ticker}: qualified-insert error — ${(e.message||'').slice(0,80)}`);
+      console.log(`  ⚠ ${co.ticker}: canonical-write error — ${(e.message||'').slice(0,80)}`);
     }
   }
 
