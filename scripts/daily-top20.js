@@ -453,7 +453,7 @@ async function main() {
       );
       await client.query(
         'INSERT INTO claims(id,opportunity_id,claim_type,text,confidence,evidence_item_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT(id) DO NOTHING',
-        ['cf_' + hash, 'o_' + hash, (extraction?.verifiedFacts[0] || `${co.ticker}: ${co.formType} ${co.filingDate}`).slice(0, 500), extraction?.confidence || 0.9, JSON.stringify(['e_' + hash])]
+        ['cf_' + hash, 'o_' + hash, 'verified_fact', (extraction?.verifiedFacts[0] || `${co.ticker}: ${co.formType} ${co.filingDate}`).slice(0, 500), extraction?.confidence || 0.9, JSON.stringify(['e_' + hash])]
       );
 
       if (extraction?.inferences) {
