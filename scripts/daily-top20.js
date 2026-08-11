@@ -21,6 +21,7 @@ const { Client } = require('pg');
 const { setApiKey, extractFromFiling } = require('../packages/engine/src/llm-extractor');
 const { measureAttention } = require('../packages/engine/src/catalyst-attention');
 const { resolveDefinedTerms } = require('../packages/engine/src/cdr');
+const { writeCanonicalOpportunity, applyQualificationGate } = require('../packages/engine/src/canonical-writer');
 
 // ALL secrets from environment variables ONLY
 const DB = process.env.DATABASE_URL;
