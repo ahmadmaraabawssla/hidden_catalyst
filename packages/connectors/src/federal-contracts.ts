@@ -70,7 +70,33 @@ export class FederalContractsConnector extends BaseConnector {
 
   async extract(doc: RawDocument): Promise<ExtractionResult> {
     const text = doc.text.toLowerCase();
-    const result: ExtractionResult = { entities: [], events: [], relationships: [], claims: [] };
+    const amount = Number((doc.metadata as any)?.amount || 0);
+    const result: ExtractionResult = {
+      signals: [{
+        source: 'usaspending',
+        sourceType: 'federal_contract',
+        externalId: (doc.metadata as any)?.awardId || doc.canonicalUrl,
+        publishedAt: doc.publishedAt,
+        retrievedAt: new Date(),
+        title: doc.title,
+        rawText: doc.text,
+        entities: [
+          { name: companyName, type: 'company', confidence: 0.7 },
+          { name: agencyName, type: 'agency', confidence: 0.95 },
+        ],
+        eventType: 'contract_award',
+        amounts: amount > 0 ? [{ value: amount, currency: 'USD', label: 'award_amount', confidence: 0.9 }] : [],
+        dates: [{ value: doc.publishedAt.toISOString().slice(0, 10), label: 'award_date', confidence: 0.8 }],
+        locations: [],
+        sourceUrl: doc.canonicalUrl,
+        sourceQuality: 95,
+        rawMetadata: (doc.metadata || {}) as Record<string, unknown>,
+      }],
+      entities: [],
+      events: [],
+      relationships: [],
+      claims: [],
+    };
 
     const agencyName = (doc.metadata as any)?.agency || 'Federal Agency';
     const companyName = (doc.metadata as any)?.recipient || 'Contractor';

@@ -22,6 +22,9 @@ function vsBadge(s: string | null): { label: string; color: string } {
   }
 }
 function researchPct(opp: any): number {
+  const stored = opp.researchCompleteness ?? opp.scores?.find((s: any) => s.scoreType === 'research_completeness')?.value;
+  if (typeof stored === 'number' && stored > 0) return Math.round(stored);
+
   var ha = opp.hiddenAngle, ok = 0, partial = 0;
   if (ha?.claim) ok++;
   if (opp.claims?.length > 0) ok++;

@@ -5,8 +5,8 @@
 function extractDefinedTerms(text) {
   var terms = {};
 
-  // 1. "$0.39912 (the Minimum Price)" — stock-price values in SEC filings
-  // Prefer values with 2+ decimal places (stock prices: $0.39912, $12.50), not whole numbers
+  // 1. "$0.12345 (the Minimum Price)" — stock-price values in SEC filings
+  // Prefer values with 2+ decimal places (stock prices: $0.12345, $12.50), not whole numbers
   var minPriceRe = /\$([\d]+\.[\d]{2,})\s*[^.]{0,80}?(?:minimum|nasdaq\s+minimum)\s*(?:price|bid\s+price)/gi;
   var m;
   while ((m = minPriceRe.exec(text)) !== null) {

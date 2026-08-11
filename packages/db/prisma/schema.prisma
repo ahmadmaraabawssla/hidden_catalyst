@@ -202,6 +202,10 @@ model Relationship {
   directness       String   @default("direct") // direct, indirect
   confidence       Float    @default(1.0)
   materiality      Float?
+  sourceDate       DateTime? @map("source_date")
+  firstSeen        DateTime @default(now()) @map("first_seen")
+  lastVerified     DateTime? @map("last_verified")
+  economicMateriality Json? @map("economic_materiality")
   validFrom        DateTime? @map("valid_from")
   validTo          DateTime? @map("valid_to")
   evidenceId       String?  @map("evidence_id")
@@ -248,6 +252,7 @@ model CatalystCluster {
   priceReactionJson  Json?    @map("price_reaction_json")
   adversarialJson    Json?    @map("adversarial_json")
   comparableJson     Json?    @map("comparable_json")
+  structuredAttributes Json?   @map("structured_attributes")
   researchQuestions  Json     @default("[]") @map("research_questions")
   researchCompleteness Float? @map("research_completeness")
   researchConfidence Float?   @map("research_confidence")
@@ -262,10 +267,28 @@ model CatalystCluster {
   primaryEntity Entity? @relation(fields: [primaryEntityId], references: [id])
   signals       CatalystClusterSignal[]
   opportunities Opportunity[]
+  monitoringEvents MonitoringEvent[]
 
   @@index([status, priorityScore])
   @@index([clusterType, firstSeenAt])
   @@map("catalyst_clusters")
+}
+
+model MonitoringEvent {
+  id            String   @id @default(cuid())
+  clusterId     String?  @map("cluster_id")
+  opportunityId String?  @map("opportunity_id")
+  state         String
+  reasons       Json     @default("[]")
+  source        String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  cluster     CatalystCluster? @relation(fields: [clusterId], references: [id])
+  opportunity Opportunity?     @relation(fields: [opportunityId], references: [id])
+
+  @@index([opportunityId, createdAt])
+  @@index([clusterId, createdAt])
+  @@map("monitoring_events")
 }
 
 model CatalystClusterSignal {
@@ -334,6 +357,7 @@ model Opportunity {
   invalidationRules InvalidationRule[]
   notifications    Notification[]
   reviewActions    ReviewAction[]
+  monitoringEvents MonitoringEvent[]
 
   priceChangePercent     Float?   @map("price_change_pct")
   volumeChangePercent    Float?   @map("volume_change_pct")

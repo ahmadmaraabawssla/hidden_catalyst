@@ -64,6 +64,27 @@ export class FDAConnector extends BaseConnector {
 
   async extract(doc: RawDocument): Promise<ExtractionResult> {
     return {
+      signals: [{
+        source: 'fda',
+        sourceType: 'fda_document',
+        externalId: (doc.metadata as any)?.appNum || doc.canonicalUrl,
+        publishedAt: doc.publishedAt,
+        retrievedAt: new Date(),
+        title: doc.title,
+        rawText: doc.text,
+        entities: [
+          { name: (doc.metadata as any)?.manufacturer || 'FDA applicant', type: 'company', confidence: 0.65 },
+          { name: (doc.metadata as any)?.brand || 'FDA product', type: 'product', confidence: 0.8 },
+          { name: 'U.S. Food and Drug Administration', type: 'agency', confidence: 1 },
+        ],
+        eventType: 'regulatory_approval',
+        amounts: [],
+        dates: [{ value: doc.publishedAt.toISOString().slice(0, 10), label: 'fda_record_date', confidence: 0.7 }],
+        locations: [],
+        sourceUrl: doc.canonicalUrl,
+        sourceQuality: 92,
+        rawMetadata: (doc.metadata || {}) as Record<string, unknown>,
+      }],
       entities: [{ name: 'U.S. Food and Drug Administration', type: 'agency' }],
       events: [{ eventType: 'regulatory_approval', title: doc.title, occurredAt: doc.publishedAt }],
       relationships: [],
@@ -134,6 +155,26 @@ export class ClinicalTrialsConnector extends BaseConnector {
   async extract(doc: RawDocument): Promise<ExtractionResult> {
     const isComplete = doc.text.toLowerCase().includes('completed');
     return {
+      signals: [{
+        source: 'clinicaltrials',
+        sourceType: 'clinical_trial',
+        externalId: (doc.metadata as any)?.nctId || doc.canonicalUrl,
+        publishedAt: doc.publishedAt,
+        retrievedAt: new Date(),
+        title: doc.title,
+        rawText: doc.text,
+        entities: [
+          { name: (doc.metadata as any)?.company || 'Trial sponsor', type: 'company', confidence: 0.65 },
+          { name: (doc.metadata as any)?.nctId || 'Clinical trial', type: 'trial', confidence: 1 },
+        ],
+        eventType: isComplete ? 'clinical_trial_result' : 'clinical_trial_update',
+        amounts: [],
+        dates: [{ value: doc.publishedAt.toISOString().slice(0, 10), label: 'trial_record_date', confidence: 0.7 }],
+        locations: [],
+        sourceUrl: doc.canonicalUrl,
+        sourceQuality: 90,
+        rawMetadata: (doc.metadata || {}) as Record<string, unknown>,
+      }],
       entities: [],
       events: [{ eventType: isComplete ? 'clinical_trial_result' : 'clinical_trial_update', title: doc.title, occurredAt: doc.publishedAt }],
       relationships: [],

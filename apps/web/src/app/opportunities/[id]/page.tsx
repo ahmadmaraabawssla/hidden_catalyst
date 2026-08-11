@@ -46,17 +46,50 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   // Prisma client wasn't regenerated after schema update — query new fields directly
   let hiddenAngle: any = null;
   let verificationStatus: string | null = 'candidate';
+  let clusterContext: any = null;
   try {
     const { Client } = await import('pg');
     const pgClient = new Client({ connectionString: process.env.DATABASE_URL });
     await pgClient.connect();
     const res = await pgClient.query(
-      `SELECT hidden_angle, verification_status FROM opportunities WHERE id = $1`,
+      `SELECT o.hidden_angle, o.verification_status, o.research_completeness,
+              c.id AS cluster_id, c.title AS cluster_title, c.thesis AS cluster_thesis,
+              c.cluster_type, c.status AS cluster_status, c.research_questions,
+              c.research_confidence, c.research_completeness, c.priority_score,
+              c.priority_factors, c.materiality_json, c.attention_json,
+              c.price_reaction_json, c.adversarial_json, c.comparable_json,
+              c.structured_attributes, c.last_evaluated_at
+       FROM opportunities o
+       LEFT JOIN catalyst_clusters c ON c.id = o.cluster_id
+       WHERE o.id = $1`,
       [params.id]
     );
     if (res.rows[0]) {
       hiddenAngle = res.rows[0].hidden_angle || null;
       verificationStatus = res.rows[0].verification_status || 'candidate';
+      clusterContext = res.rows[0].cluster_id ? res.rows[0] : null;
+      if (clusterContext) {
+        const sigs = await pgClient.query(
+          `SELECT s.title, s.source_type, s.event_type, s.published_at, s.source_url,
+                  s.amounts, s.entities, cs.role, cs.confidence
+           FROM catalyst_cluster_signals cs
+           JOIN signals s ON s.id = cs.signal_id
+           WHERE cs.cluster_id = $1
+           ORDER BY cs.role = 'primary' DESC, s.published_at DESC
+           LIMIT 5`,
+          [clusterContext.cluster_id]
+        );
+        clusterContext.signals = sigs.rows;
+        const monitoring = await pgClient.query(
+          `SELECT state, reasons, source, created_at
+           FROM monitoring_events
+           WHERE cluster_id = $1 OR opportunity_id = $2
+           ORDER BY created_at DESC
+           LIMIT 5`,
+          [clusterContext.cluster_id, params.id]
+        );
+        clusterContext.monitoring_events = monitoring.rows;
+      }
     }
     await pgClient.end();
   } catch {}
@@ -129,6 +162,17 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   } catch {}
 
   const vs = verStatusLabel(verificationStatus);
+  const clusterSignals = clusterContext?.signals || [];
+  const materiality = clusterContext?.materiality_json || null;
+  const attention = clusterContext?.attention_json || null;
+  const priceReaction = clusterContext?.price_reaction_json || null;
+  const adversarial = clusterContext?.adversarial_json || null;
+  const comparable = clusterContext?.comparable_json || null;
+  const monitoringEvents = clusterContext?.monitoring_events || [];
+  const researchCompleteness =
+    Math.round(clusterContext?.research_completeness ?? clusterContext?.researchCompleteness ?? scores.research_completeness ?? 0);
+  const researchConfidence =
+    Math.round(clusterContext?.research_confidence ?? clusterContext?.researchConfidence ?? scores.research_confidence ?? 0);
 
   return (
     <div className="page-container">
@@ -206,15 +250,15 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
         <div className="flex flex-col items-center gap-2 text-sm">
           {/* Node 1 */}
           <div className="px-4 py-2 bg-white rounded-lg border border-gray-300 shadow-sm text-center max-w-xs">
-            <span className="font-semibold text-gray-800">Aug 10 Amendment</span>
-            <p className="text-xs text-gray-500 mt-0.5">Introduces potential $1M true-up</p>
+            <span className="font-semibold text-gray-800">{clusterContext?.cluster_title || opp.event?.title || 'Primary Signal'}</span>
+            <p className="text-xs text-gray-500 mt-0.5">{clusterContext?.cluster_type || opp.event?.eventType || 'Public-source catalyst'}</p>
           </div>
           <span className="text-gray-400 text-lg">↓ references</span>
           {/* Node 2 */}
           <div className="px-4 py-2 bg-white rounded-lg border border-brand-300 shadow-sm text-center max-w-xs">
-            <span className="font-semibold text-brand-700">July 14 Purchase Agreement</span>
+            <span className="font-semibold text-brand-700">{clusterContext?.signals?.[0]?.title || 'Evidence Chain'}</span>
             <p className="text-xs text-gray-500 mt-0.5">
-              Defines Minimum Price at <span className="font-mono font-semibold text-brand-700">$0.39912</span>
+              {clusterContext?.signals?.[0]?.source_type || 'Primary and contextual records'}
             </p>
           </div>
           <span className="text-gray-400 text-lg">↓ compared with</span>
@@ -222,14 +266,70 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           <div className="px-4 py-2 bg-white rounded-lg border border-gray-300 shadow-sm text-center max-w-xs">
             <span className="font-semibold text-gray-800">Market Data</span>
             <p className="text-xs text-gray-500 mt-0.5">
-              GCTK {opp.security.latestPrice ? formatPrice(opp.security.latestPrice) : 'N/A'}
+              {opp.security.ticker} {opp.security.latestPrice ? formatPrice(opp.security.latestPrice) : 'N/A'}
             </p>
           </div>
         </div>
         <div className="mt-3 text-center">
           <p className="text-xs font-medium text-brand-600">
-            → Stock trades near a contractual threshold relevant to the amended financing mechanism
+            → Hidden Catalyst links the public signal, issuer, evidence chain, and market context before ranking the opportunity.
           </p>
+        </div>
+      </section>
+
+      <section className="mb-8 grid gap-4 lg:grid-cols-3">
+        <div className="card">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Catalyst Cluster</h2>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-gray-900">{clusterContext?.cluster_title || opp.title}</p>
+            <div className="flex flex-wrap gap-1">
+              <Badge>{clusterContext?.cluster_type || opp.event?.eventType || 'public_signal'}</Badge>
+              <Badge variant={clusterContext?.cluster_status === 'qualified' ? 'success' : 'default'}>
+                {clusterContext?.cluster_status || verificationStatus}
+              </Badge>
+            </div>
+            <p className="text-xs text-gray-500">
+              Priority {Math.round(clusterContext?.priority_score ?? scores.research_priority ?? scores.opportunity ?? 0)} · {clusterSignals.length} linked signals
+            </p>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Signal Sources</h2>
+          {clusterSignals.length > 0 ? (
+            <div className="space-y-2">
+              {clusterSignals.slice(0, 4).map((signal: any, i: number) => (
+                <a key={i} href={signal.source_url || '#'} className="block rounded border border-gray-100 p-2 text-sm hover:bg-gray-50">
+                  <span className="font-medium text-brand-700">{signal.source_type || 'source'}</span>
+                  <span className="text-gray-400"> · </span>
+                  <span className="text-gray-600">{signal.event_type || 'event'}</span>
+                  <div className="mt-0.5 text-xs text-gray-500">{signal.title}</div>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">This older opportunity has no normalized signal links yet.</p>
+          )}
+        </div>
+
+        <div className="card">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Research State</h2>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-2xl font-bold text-gray-900">{researchCompleteness || 0}%</div>
+              <div className="text-xs text-gray-500">Completeness</div>
+            </div>
+            <div>
+              <div className="text-2xl font-bold text-gray-900">{researchConfidence || 0}%</div>
+              <div className="text-xs text-gray-500">Confidence</div>
+            </div>
+          </div>
+          {monitoringEvents.length > 0 && (
+            <div className="mt-3 border-t border-gray-100 pt-3">
+              <div className="text-xs font-medium text-gray-500">Latest Monitoring</div>
+              <p className="mt-1 text-sm font-medium text-gray-800">{monitoringEvents[0].state}</p>
+            </div>
+          )}
         </div>
       </section>
 
@@ -314,6 +414,73 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           </section>
 
           {/* ── RESEARCH SCORES ── */}
+          {(materiality || attention || priceReaction || comparable) && (
+            <section className="card">
+              <h2 className="text-base font-semibold text-gray-900 mb-3">Catalyst Intelligence</h2>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {materiality && (
+                  <div className="rounded-lg border border-gray-100 p-3">
+                    <div className="text-xs font-medium uppercase text-gray-500">Materiality</div>
+                    <div className="mt-1 text-lg font-bold text-gray-900">{materiality.level || 'UNKNOWN'}</div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {materiality.metric || 'Metric pending'} {materiality.ratio != null ? `· ${(materiality.ratio * 100).toFixed(1)}%` : ''}
+                    </p>
+                  </div>
+                )}
+                {attention && (
+                  <div className="rounded-lg border border-gray-100 p-3">
+                    <div className="text-xs font-medium uppercase text-gray-500">Attention</div>
+                    <div className="mt-1 text-lg font-bold text-gray-900">
+                      Company {Math.round(attention.companyAttentionScore ?? 0)}
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Catalyst {Math.round(attention.catalystAttentionScore ?? 0)} · asymmetry {Math.round(attention.informationAsymmetryScore ?? 0)}
+                    </p>
+                  </div>
+                )}
+                {priceReaction && (
+                  <div className="rounded-lg border border-gray-100 p-3">
+                    <div className="text-xs font-medium uppercase text-gray-500">Market Reaction</div>
+                    <div className="mt-1 text-lg font-bold text-gray-900">{priceReaction.marketReaction || 'unknown'}</div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Priced-in score {Math.round(priceReaction.pricedInScore ?? 0)}
+                    </p>
+                  </div>
+                )}
+                {comparable && (
+                  <div className="rounded-lg border border-gray-100 p-3">
+                    <div className="text-xs font-medium uppercase text-gray-500">Historical Comparables</div>
+                    <div className="mt-1 text-lg font-bold text-gray-900">n={comparable.n ?? 0}</div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Median abnormal return {comparable.medianAbnormalReturn != null ? `${comparable.medianAbnormalReturn.toFixed(1)}%` : 'pending'} · hit rate {comparable.hitRate != null ? `${Math.round(comparable.hitRate * 100)}%` : 'pending'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {adversarial && (
+            <section className="card border-red-200 bg-red-50/20">
+              <h2 className="text-base font-semibold text-red-800 mb-3">Adversarial Thesis Pass</h2>
+              {adversarial.findings?.length > 0 ? (
+                <div className="space-y-2">
+                  {adversarial.findings.map((finding: any, i: number) => (
+                    <div key={i} className="rounded border border-red-100 bg-white p-2">
+                      <div className="text-sm font-medium text-red-800">{finding.title || finding.type || 'Limitation'}</div>
+                      <p className="mt-0.5 text-xs text-red-700">{finding.description || finding.evidence || 'Counter-evidence requires review.'}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-red-700">No deterministic contradiction identified yet. This is not a substitute for human review.</p>
+              )}
+              {adversarial.fatalContradiction && (
+                <div className="mt-3"><Badge variant="danger">Fatal invalidator detected</Badge></div>
+              )}
+            </section>
+          )}
+
           <section className="card">
             <h2 className="text-base font-semibold text-gray-900 mb-3">Research Scores</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

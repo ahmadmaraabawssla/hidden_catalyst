@@ -138,7 +138,7 @@ function pass2Prompt(text, company, ticker, form, profile, factsStr, companyCont
     '',
     '=== TITLE ===',
     'insightTitle: "TICKER: specific insight." NOT "[8-K] Company Name" or truncated text.',
-    'Example: "GCTK: White Lion amendment adds $1M cash true-up near contractual price threshold"',
+    'Example: "Issuer filing adds a material financing obligation tied to a contractual price threshold"',
     '',
     '=== VERIFICATION GATE ===',
     'verificationConfidence >= 0.85: thresholds resolved, market data cross-referenced, cross-refs resolved → verified',

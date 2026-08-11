@@ -6,6 +6,8 @@ import {
   type QualificationGateInput,
   type ResearchPriorityInput,
 } from '@hidden-catalyst/domain';
+import { computeMateriality, extractLargestAmount } from './materiality';
+import { runDeterministicAdversarialCheck } from './adversarial';
 
 const MATERIAL_EVENT_TYPES = new Set([
   'contract_award',
@@ -184,4 +186,97 @@ export async function createCatalystClusterFromSignal(signalId: string) {
 
 export function classifyQualification(input: QualificationGateInput) {
   return qualifyOpportunity(input);
+}
+
+export async function triageUnclusteredSignals(limit = 100, minPriority = 55) {
+  const signals = await prisma.signal.findMany({
+    where: {
+      triageScore: { gte: minPriority },
+      clusterSignals: { none: {} },
+    },
+    orderBy: [{ triageScore: 'desc' }, { publishedAt: 'desc' }],
+    take: limit,
+  });
+
+  const clusters = [];
+  for (const signal of signals) {
+    clusters.push(await createCatalystClusterFromSignal(signal.id));
+  }
+  return { signals: signals.length, clusters: clusters.length };
+}
+
+export async function evaluateClusterForOpportunity(clusterId: string) {
+  const cluster = await prisma.catalystCluster.findUnique({
+    where: { id: clusterId },
+    include: { signals: { include: { signal: true } } },
+  });
+  if (!cluster) throw new Error(`Cluster ${clusterId} not found`);
+
+  const primary = cluster.signals[0]?.signal;
+  const amounts = primary?.amounts as Array<{ value?: number }> | undefined;
+  const largestAmount = extractLargestAmount(amounts);
+  const materiality = computeMateriality({
+    eventType: cluster.clusterType,
+    amount: largestAmount,
+  });
+  const adversarial = runDeterministicAdversarialCheck({
+    eventType: cluster.clusterType,
+    title: cluster.title,
+    thesis: cluster.thesis,
+    materialityRatio: materiality.ratio,
+    evidenceQuality: primary?.sourceQuality || 50,
+    relationshipConfidence: 70,
+    priceReactionScore: 50,
+  });
+  const completeness = Math.max(25, Math.min(100,
+    20 +
+    (primary ? 20 : 0) +
+    (largestAmount ? 15 : 0) +
+    (materiality.ratio != null ? 20 : 0) +
+    (adversarial.findings.length > 0 ? 15 : 0)
+  ));
+  const qualification = qualifyOpportunity({
+    primaryEvidenceExists: !!primary,
+    hiddenAngleExists: !!cluster.thesis || !!primary?.title,
+    relationshipConfidence: 70,
+    materialityScore: materiality.level === 'UNKNOWN' ? 40 : materiality.level === 'LOW' ? 35 : materiality.level === 'MODERATE' ? 60 : 85,
+    liquidityAcceptable: true,
+    dataFreshnessScore: primary ? 80 : 30,
+    fatalContradiction: adversarial.fatalContradiction,
+    evidenceQuality: primary?.sourceQuality || 50,
+    researchCompleteness: completeness,
+  });
+
+  await prisma.catalystCluster.update({
+    where: { id: clusterId },
+    data: {
+      status: qualification.status === 'reject' ? 'rejected' : qualification.status === 'watch' ? 'triaged' : 'qualified',
+      materialityJson: materiality as any,
+      adversarialJson: adversarial as any,
+      researchCompleteness: completeness,
+      researchConfidence: Math.max(0, completeness - adversarial.confidencePenalty),
+      lastEvaluatedAt: new Date(),
+    },
+  });
+
+  return { clusterId, materiality, adversarial, qualification, completeness };
+}
+
+export async function runSourceAgnosticIntelligencePass(params?: {
+  signalLimit?: number;
+  minPriority?: number;
+}) {
+  const triage = await triageUnclusteredSignals(params?.signalLimit ?? 100, params?.minPriority ?? 55);
+  const clusters = await prisma.catalystCluster.findMany({
+    where: { status: { in: ['open', 'triaged'] } },
+    orderBy: [{ priorityScore: 'desc' }, { firstSeenAt: 'desc' }],
+    take: params?.signalLimit ?? 100,
+  });
+
+  const evaluated = [];
+  for (const cluster of clusters) {
+    evaluated.push(await evaluateClusterForOpportunity(cluster.id));
+  }
+
+  return { triage, evaluated: evaluated.length };
 }

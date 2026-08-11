@@ -62,7 +62,12 @@ export class SECEdgarConnector extends BaseConnector {
           title: `Form ${source.form?.toUpperCase() || '8-K'} — ${source.displayNames?.[0] || 'Unknown'}`,
           text: source.fileStr || `Filing. Form: ${source.form}`,
           publishedAt: new Date(source.fileDate || source.filedAt || Date.now()),
-          metadata: { cik, formType: source.form?.toUpperCase(), displayName: source.displayNames?.[0] },
+          metadata: {
+            cik,
+            accessionNumber: source.accessionNumber,
+            formType: source.form?.toUpperCase(),
+            displayName: source.displayNames?.[0],
+          },
         });
       }
 
@@ -81,6 +86,30 @@ export class SECEdgarConnector extends BaseConnector {
   async extract(doc: RawDocument): Promise<ExtractionResult> {
     const text = doc.text.toLowerCase();
     const result: ExtractionResult = {
+      signals: [{
+        source: 'sec_edgar',
+        sourceType: 'sec_filing',
+        externalId: (doc.metadata as any)?.accessionNumber || doc.canonicalUrl,
+        publishedAt: doc.publishedAt,
+        retrievedAt: new Date(),
+        title: doc.title,
+        rawText: doc.text,
+        entities: [
+          {
+            name: (doc.metadata as any)?.displayName || 'SEC registrant',
+            type: 'company',
+            identifiers: { cik: (doc.metadata as any)?.cik || '' },
+            confidence: 0.9,
+          },
+        ],
+        eventType: (doc.metadata as any)?.formType || 'sec_filing',
+        amounts: this.extractDollarAmounts(doc.text),
+        dates: [{ value: doc.publishedAt.toISOString().slice(0, 10), label: 'filing_date', confidence: 1 }],
+        locations: [],
+        sourceUrl: doc.canonicalUrl,
+        sourceQuality: 88,
+        rawMetadata: (doc.metadata || {}) as Record<string, unknown>,
+      }],
       entities: [],
       events: [],
       relationships: [],
@@ -129,5 +158,19 @@ export class SECEdgarConnector extends BaseConnector {
     });
 
     return result;
+  }
+
+  private extractDollarAmounts(text: string) {
+    const amounts: Array<{ value: number; currency: string; label: string; confidence: number }> = [];
+    const re = /\$\s?(\d+(?:\.\d+)?)\s?(million|billion|m|b)?/ig;
+    let match;
+    while ((match = re.exec(text)) && amounts.length < 10) {
+      let value = Number(match[1]);
+      const unit = (match[2] || '').toLowerCase();
+      if (unit === 'billion' || unit === 'b') value *= 1e9;
+      if (unit === 'million' || unit === 'm') value *= 1e6;
+      amounts.push({ value, currency: 'USD', label: match[0], confidence: 0.7 });
+    }
+    return amounts;
   }
 }

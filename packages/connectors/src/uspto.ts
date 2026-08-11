@@ -67,6 +67,27 @@ export class USPTOConnector extends BaseConnector {
 
   async extract(doc: RawDocument): Promise<ExtractionResult> {
     return {
+      signals: [{
+        source: 'uspto',
+        sourceType: 'patent_grant',
+        externalId: (doc.metadata as any)?.patentNumber || doc.canonicalUrl,
+        publishedAt: doc.publishedAt,
+        retrievedAt: new Date(),
+        title: doc.title,
+        rawText: doc.text,
+        entities: [
+          { name: (doc.metadata as any)?.assignee || 'Patent assignee', type: 'company', confidence: 0.65 },
+          { name: (doc.metadata as any)?.patentNumber || 'Patent', type: 'patent', confidence: 1 },
+          { name: 'U.S. Patent and Trademark Office', type: 'agency', confidence: 1 },
+        ],
+        eventType: 'patent_grant',
+        amounts: [],
+        dates: [{ value: doc.publishedAt.toISOString().slice(0, 10), label: 'grant_date', confidence: 0.9 }],
+        locations: [],
+        sourceUrl: doc.canonicalUrl,
+        sourceQuality: 90,
+        rawMetadata: (doc.metadata || {}) as Record<string, unknown>,
+      }],
       entities: [{ name: 'U.S. Patent and Trademark Office', type: 'agency' }],
       events: [{ eventType: 'patent_grant', title: doc.title, occurredAt: doc.publishedAt }],
       relationships: [],

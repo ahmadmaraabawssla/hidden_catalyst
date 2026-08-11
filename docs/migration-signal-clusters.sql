@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS catalyst_clusters (
   price_reaction_json JSONB,
   adversarial_json JSONB,
   comparable_json JSONB,
+  structured_attributes JSONB,
   research_questions JSONB NOT NULL DEFAULT '[]',
   research_completeness DOUBLE PRECISION,
   research_confidence DOUBLE PRECISION,
@@ -79,6 +80,27 @@ ALTER TABLE opportunities
   ADD COLUMN IF NOT EXISTS engine_version TEXT,
   ADD COLUMN IF NOT EXISTS run_id TEXT,
   ADD COLUMN IF NOT EXISTS last_researched_at TIMESTAMP(3);
+
+ALTER TABLE relationships
+  ADD COLUMN IF NOT EXISTS source_date TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS first_seen TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS last_verified TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS economic_materiality JSONB;
+
+CREATE TABLE IF NOT EXISTS monitoring_events (
+  id TEXT PRIMARY KEY,
+  cluster_id TEXT REFERENCES catalyst_clusters(id),
+  opportunity_id TEXT REFERENCES opportunities(id),
+  state TEXT NOT NULL,
+  reasons JSONB NOT NULL DEFAULT '[]',
+  source TEXT,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS monitoring_events_opportunity_created_at_idx
+  ON monitoring_events(opportunity_id, created_at);
+CREATE INDEX IF NOT EXISTS monitoring_events_cluster_created_at_idx
+  ON monitoring_events(cluster_id, created_at);
 
 CREATE TABLE IF NOT EXISTS discovery_runs (
   id TEXT PRIMARY KEY,

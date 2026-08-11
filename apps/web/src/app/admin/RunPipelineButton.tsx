@@ -15,17 +15,17 @@ export default function RunPipelineButton() {
     setCount(0);
 
     try {
-      const res = await fetch('/api/admin/run-daily-top20', { method: 'POST' });
+      const res = await fetch('/api/admin/run-source-agnostic', { method: 'POST' });
       const data = await res.json();
 
-      if (!data.success) {
+      if (!data.ok) {
         setSteps(data.steps || [data.error || 'Unknown error']);
         setStatus('error');
         return;
       }
 
       setSteps(data.steps);
-      setCount(data.published);
+      setCount(data.intelligence?.evaluated || 0);
       setStatus('done');
       router.refresh();
     } catch (err: any) {
@@ -51,12 +51,12 @@ export default function RunPipelineButton() {
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
-            Running AI Pipeline...
+            Running Intelligence Engine...
           </span>
         ) : status === 'done' ? (
-          `✅ Published ${count} — Run Again`
+          `Done · Evaluated ${count} clusters`
         ) : (
-          '🤖 Run Daily Top 20'
+          'Run Source-Agnostic Engine'
         )}
       </button>
 
