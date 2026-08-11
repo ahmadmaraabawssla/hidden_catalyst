@@ -25,18 +25,22 @@ export interface ScoreWeights {
   financialMateriality: number;
   timing: number;
   priceReaction: number;
+  relationshipConfidence: number;
+  researchConfidence: number;
   riskPenalty: number;
   liquidityPenalty: number;
   dilutionPenalty: number;
 }
 
 export const DEFAULT_WEIGHTS: ScoreWeights = {
-  informationAsymmetry: 0.25,
-  catalystStrength: 0.20,
-  evidenceQuality: 0.20,
-  financialMateriality: 0.15,
-  timing: 0.10,
-  priceReaction: 0.10,
+  informationAsymmetry: 0.20,
+  catalystStrength: 0.16,
+  evidenceQuality: 0.16,
+  financialMateriality: 0.14,
+  timing: 0.08,
+  priceReaction: 0.08,
+  relationshipConfidence: 0.10,
+  researchConfidence: 0.08,
   riskPenalty: 0.10,
   liquidityPenalty: 0.05,
   dilutionPenalty: 0.05,
@@ -49,6 +53,8 @@ export interface ScoreInput {
   financialMateriality: number; // 1-100
   timing: number;               // 1-100
   priceReaction: number;        // 1-100
+  relationshipConfidence: number; // 1-100
+  researchConfidence: number;   // 1-100
   risk: number;                 // 1-100 (higher = riskier)
   liquidityPenalty: number;     // 0-100
   dilutionPenalty: number;      // 0-100
@@ -58,7 +64,7 @@ export interface ScoreResult {
   scoreType: ScoreType;
   value: number;
   factors: Record<string, number>;
-  weights: ScoreWeights;
+  weights: Record<string, number>;
   confidence: number;
   modelVersion: string;
 }
@@ -79,7 +85,9 @@ export function calculateOpportunityScore(
     weights.evidenceQuality * input.evidenceQuality +
     weights.financialMateriality * input.financialMateriality +
     weights.timing * input.timing +
-    weights.priceReaction * input.priceReaction -
+    weights.priceReaction * input.priceReaction +
+    weights.relationshipConfidence * input.relationshipConfidence +
+    weights.researchConfidence * input.researchConfidence -
     weights.riskPenalty * input.risk -
     weights.liquidityPenalty * input.liquidityPenalty -
     weights.dilutionPenalty * input.dilutionPenalty;
@@ -104,6 +112,8 @@ export function calculateOpportunityScore(
       financialMateriality: input.financialMateriality,
       timing: input.timing,
       priceReaction: input.priceReaction,
+      relationshipConfidence: input.relationshipConfidence,
+      researchConfidence: input.researchConfidence,
       risk: input.risk,
       liquidityPenalty: input.liquidityPenalty,
       dilutionPenalty: input.dilutionPenalty,
@@ -112,6 +122,92 @@ export function calculateOpportunityScore(
     confidence,
     modelVersion: SCORE_MODEL_VERSION,
   };
+}
+
+export interface ResearchPriorityInput {
+  dollarAmountScore: number;
+  companyScaleScore: number;
+  eventTypeScore: number;
+  sourceQuality: number;
+  unusualKeywordScore: number;
+  indirectRelationshipScore: number;
+  newRelationshipScore: number;
+  recencyScore: number;
+  apparentMagnitudeScore: number;
+}
+
+export interface QualificationGateInput {
+  primaryEvidenceExists: boolean;
+  hiddenAngleExists: boolean;
+  relationshipConfidence: number;
+  materialityScore: number;
+  liquidityAcceptable: boolean;
+  dataFreshnessScore: number;
+  fatalContradiction: boolean;
+  evidenceQuality: number;
+  researchCompleteness: number;
+}
+
+export function calculateResearchPriority(input: ResearchPriorityInput): ScoreResult {
+  const weights = {
+    dollarAmountScore: 0.16,
+    companyScaleScore: 0.12,
+    eventTypeScore: 0.14,
+    sourceQuality: 0.14,
+    unusualKeywordScore: 0.08,
+    indirectRelationshipScore: 0.10,
+    newRelationshipScore: 0.10,
+    recencyScore: 0.08,
+    apparentMagnitudeScore: 0.08,
+  };
+
+  const raw = Object.entries(weights).reduce((sum, [key, weight]) => {
+    return sum + weight * input[key as keyof ResearchPriorityInput];
+  }, 0);
+
+  return {
+    scoreType: 'research_priority',
+    value: Math.round(clamp(raw, 1, 100)),
+    factors: { ...input },
+    weights,
+    confidence: 1,
+    modelVersion: SCORE_MODEL_VERSION,
+  };
+}
+
+export function qualifyOpportunity(input: QualificationGateInput): {
+  status: 'reject' | 'watch' | 'candidate' | 'verified';
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+
+  if (!input.primaryEvidenceExists) reasons.push('No primary evidence');
+  if (!input.hiddenAngleExists) reasons.push('No hidden angle');
+  if (input.relationshipConfidence < 70) reasons.push('Weak economic relationship');
+  if (input.materialityScore < 35) reasons.push('Materiality below threshold');
+  if (!input.liquidityAcceptable) reasons.push('Liquidity below threshold');
+  if (input.dataFreshnessScore < 40) reasons.push('Evidence is stale');
+  if (input.fatalContradiction) reasons.push('Fatal contradiction found');
+  if (input.evidenceQuality < 55) reasons.push('Evidence quality below threshold');
+
+  if (input.fatalContradiction || !input.primaryEvidenceExists || input.evidenceQuality < 40) {
+    return { status: 'reject', reasons };
+  }
+
+  if (reasons.length > 0 || input.researchCompleteness < 55) {
+    return { status: 'watch', reasons };
+  }
+
+  if (
+    input.relationshipConfidence >= 90 &&
+    input.materialityScore >= 70 &&
+    input.evidenceQuality >= 80 &&
+    input.researchCompleteness >= 85
+  ) {
+    return { status: 'verified', reasons };
+  }
+
+  return { status: 'candidate', reasons };
 }
 
 /**

@@ -8,6 +8,12 @@ export type OpportunityStatus =
   | 'archived'
   | 'invalidated';
 
+export type QualificationStatus =
+  | 'reject'
+  | 'watch'
+  | 'candidate'
+  | 'verified';
+
 // Claim types for separating fact from inference
 export type ClaimType =
   | 'verified_fact'
@@ -18,6 +24,7 @@ export type ClaimType =
 
 // Score categories
 export type ScoreType =
+  | 'research_priority'
   | 'company_attention'
   | 'catalyst_attention'
   | 'information_asymmetry'
@@ -27,10 +34,14 @@ export type ScoreType =
   | 'timing'
   | 'price_reaction'
   | 'risk'
+  | 'relationship_confidence'
+  | 'research_confidence'
+  | 'research_completeness'
   | 'opportunity';
 
 // Catalyst categories
 export type CatalystType =
+  | 'contract_solicitation'
   | 'contract_award'
   | 'contract_modification'
   | 'regulatory_approval'
@@ -46,6 +57,67 @@ export type CatalystType =
   | 'facility_expansion'
   | 'legal_development'
   | 'other';
+
+export type SignalSourceFamily =
+  | 'sec_edgar'
+  | 'sam_gov'
+  | 'usaspending'
+  | 'fda'
+  | 'clinicaltrials'
+  | 'uspto'
+  | 'grants_gov'
+  | 'market_data'
+  | 'news'
+  | 'company_ir'
+  | 'other';
+
+export interface NormalizedSignal {
+  signalId?: string;
+  source: SignalSourceFamily;
+  sourceType: SourceType | string;
+  externalId?: string;
+  publishedAt: Date;
+  retrievedAt: Date;
+  title: string;
+  rawText: string;
+  entities: Array<{
+    name: string;
+    type: EntityType | string;
+    identifiers?: Record<string, string>;
+    confidence?: number;
+  }>;
+  eventType?: CatalystType | string;
+  amounts: Array<{
+    value: number;
+    currency?: string;
+    label?: string;
+    confidence?: number;
+  }>;
+  dates: Array<{
+    value: string;
+    label?: string;
+    confidence?: number;
+  }>;
+  locations: Array<{
+    value: string;
+    type?: string;
+    confidence?: number;
+  }>;
+  sourceUrl: string;
+  sourceQuality: number;
+  rawMetadata: Record<string, unknown>;
+}
+
+export interface CatalystClusterResearch {
+  researchQuestions: string[];
+  materiality?: Record<string, unknown>;
+  attention?: Record<string, unknown>;
+  priceReaction?: Record<string, unknown>;
+  adversarialFindings?: Record<string, unknown>;
+  historicalComparables?: Record<string, unknown>;
+  researchCompleteness: number;
+  researchConfidence: number;
+}
 
 // Entity types for the knowledge graph
 export type EntityType =

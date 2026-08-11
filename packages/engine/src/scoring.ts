@@ -190,6 +190,13 @@ export async function generateScoreInputs(
   const timing = daysSinceNews <= 1 ? 95 : daysSinceNews <= 3 ? 85 : daysSinceNews <= 7 ? 70 : daysSinceNews <= 14 ? 50 : 30;
   const riskScore = mc < 100e6 ? 60 : mc < 300e6 ? 50 : mc < 1e9 ? 40 : mc < 5e9 ? 30 : 20;
   const liquidityPenalty = mc < 100e6 ? 35 : mc < 300e6 ? 20 : mc < 1e9 ? 10 : 0;
+  const relationshipConfidence = hasNamedParties ? 82 : 55;
+  const researchConfidence = Math.round(
+    (evidenceQuality * 0.45) +
+    (relationshipConfidence * 0.25) +
+    (hasDollarAmounts ? 20 : 8) +
+    (priceReaction > 0 ? 10 : 0)
+  );
 
   return {
     informationAsymmetry: infoAsym,
@@ -198,6 +205,8 @@ export async function generateScoreInputs(
     financialMateriality,
     timing,
     priceReaction,
+    relationshipConfidence,
+    researchConfidence: Math.min(100, researchConfidence),
     risk: riskScore,
     liquidityPenalty,
     dilutionPenalty: 0,
@@ -246,6 +255,9 @@ export async function scoreOpportunity(opportunityId: string) {
     { type: 'financial_materiality' as const, value: inputs.financialMateriality },
     { type: 'timing' as const, value: inputs.timing },
     { type: 'price_reaction' as const, value: inputs.priceReaction },
+    { type: 'relationship_confidence' as const, value: inputs.relationshipConfidence },
+    { type: 'research_confidence' as const, value: inputs.researchConfidence },
+    { type: 'research_completeness' as const, value: opp.researchCompleteness ?? inputs.researchConfidence },
     { type: 'risk' as const, value: inputs.risk },
     { type: 'opportunity' as const, value: result.value },
   ];

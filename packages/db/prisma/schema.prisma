@@ -86,9 +86,43 @@ model Source {
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   documents     Document[]
+  signals       Signal[]
   ingestionRuns IngestionRun[]
 
   @@map("sources")
+}
+
+model Signal {
+  id             String   @id @default(cuid())
+  sourceId       String   @map("source_id")
+  documentId     String?  @map("document_id")
+  sourceType     String   @map("source_type")
+  externalId     String?  @map("external_id")
+  publishedAt    DateTime @map("published_at")
+  retrievedAt    DateTime @map("retrieved_at")
+  title          String
+  rawText        String?  @map("raw_text")
+  entities       Json     @default("[]")
+  eventType      String?  @map("event_type")
+  amounts        Json     @default("[]")
+  dates          Json     @default("[]")
+  locations      Json     @default("[]")
+  sourceUrl      String   @map("source_url")
+  sourceQuality  Float?   @map("source_quality")
+  rawMetadata    Json     @default("{}") @map("raw_metadata")
+  triageScore    Float?   @map("triage_score")
+  triageFactors  Json?    @map("triage_factors")
+  triagedAt      DateTime? @map("triaged_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  source  Source    @relation(fields: [sourceId], references: [id])
+  document Document? @relation(fields: [documentId], references: [id])
+  clusterSignals CatalystClusterSignal[]
+
+  @@unique([sourceId, externalId])
+  @@index([sourceType, publishedAt])
+  @@index([eventType, publishedAt])
+  @@map("signals")
 }
 
 model Document {
@@ -107,6 +141,7 @@ model Document {
 
   source        Source         @relation(fields: [sourceId], references: [id])
   evidenceItems EvidenceItem[]
+  signals       Signal[]
 
   @@unique([contentHash])
   @@map("documents")
@@ -127,6 +162,7 @@ model Entity {
   relationshipsFrom Relationship[] @relation("FromEntity")
   relationshipsTo   Relationship[] @relation("ToEntity")
   events           Event[]
+  catalystClusters CatalystCluster[]
 
   @@map("entities")
 }
@@ -194,8 +230,57 @@ model Event {
 
   primaryEntity Entity?       @relation(fields: [primaryEntityId], references: [id])
   opportunities Opportunity[]
+  catalystClusters CatalystCluster[]
 
   @@map("events")
+}
+
+model CatalystCluster {
+  id                 String   @id @default(cuid())
+  eventId            String?  @map("event_id")
+  title              String
+  thesis             String?
+  clusterType        String   @map("cluster_type")
+  status             String   @default("open") // open, triaged, researching, qualified, rejected, monitoring, stale
+  primaryEntityId    String?  @map("primary_entity_id")
+  materialityJson    Json?    @map("materiality_json")
+  attentionJson      Json?    @map("attention_json")
+  priceReactionJson  Json?    @map("price_reaction_json")
+  adversarialJson    Json?    @map("adversarial_json")
+  comparableJson     Json?    @map("comparable_json")
+  researchQuestions  Json     @default("[]") @map("research_questions")
+  researchCompleteness Float? @map("research_completeness")
+  researchConfidence Float?   @map("research_confidence")
+  priorityScore      Float?   @map("priority_score")
+  priorityFactors    Json?    @map("priority_factors")
+  firstSeenAt        DateTime @default(now()) @map("first_seen_at")
+  lastEvaluatedAt    DateTime? @map("last_evaluated_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  event         Event?  @relation(fields: [eventId], references: [id])
+  primaryEntity Entity? @relation(fields: [primaryEntityId], references: [id])
+  signals       CatalystClusterSignal[]
+  opportunities Opportunity[]
+
+  @@index([status, priorityScore])
+  @@index([clusterType, firstSeenAt])
+  @@map("catalyst_clusters")
+}
+
+model CatalystClusterSignal {
+  id        String   @id @default(cuid())
+  clusterId String   @map("cluster_id")
+  signalId  String   @map("signal_id")
+  role      String   @default("supporting") // primary, corroborating, contradiction, context
+  confidence Float   @default(1.0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  cluster CatalystCluster @relation(fields: [clusterId], references: [id])
+  signal  Signal          @relation(fields: [signalId], references: [id])
+
+  @@unique([clusterId, signalId])
+  @@map("catalyst_cluster_signals")
 }
 
 // ─── Evidence ───
@@ -223,6 +308,7 @@ model Opportunity {
   id           String   @id @default(cuid())
   securityId   String   @map("security_id")
   eventId      String?  @map("event_id")
+  clusterId    String?  @map("cluster_id")
   title        String
   summary      String?
   status       String   @default("candidate") // candidate, needs_review, approved, published, rejected, archived, invalidated
@@ -231,12 +317,14 @@ model Opportunity {
   detectedAt   DateTime @default(now()) @map("detected_at")
   publishedAt  DateTime? @map("published_at")
   confidence   Float?
+  researchCompleteness Float? @map("research_completeness")
   reviewerId   String?  @map("reviewer_id")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   security         Security          @relation(fields: [securityId], references: [id])
   event            Event?            @relation(fields: [eventId], references: [id])
+  cluster          CatalystCluster?   @relation(fields: [clusterId], references: [id])
   claims           Claim[]
   scores           Score[]
   risks            Risk[]

@@ -9,6 +9,7 @@
  */
 
 import type { PrismaClient } from '@hidden-catalyst/db';
+import type { NormalizedSignal } from '@hidden-catalyst/domain';
 
 export interface ConnectorConfig {
   sourceId: string;
@@ -32,6 +33,7 @@ export interface RawDocument {
 }
 
 export interface ExtractionResult {
+  signals?: NormalizedSignal[];
   entities: {
     name: string;
     type: string;
@@ -132,6 +134,54 @@ export abstract class BaseConnector {
           // Extract structured data
           const extracted = await this.extract(raw);
 
+          for (const signal of extracted.signals || []) {
+            const priority = this.calculateSignalPriority(signal);
+            await this.prisma.signal.upsert({
+              where: {
+                sourceId_externalId: {
+                  sourceId: this.config.sourceId,
+                  externalId: signal.externalId || signal.sourceUrl,
+                },
+              },
+              update: {
+                title: signal.title,
+                rawText: signal.rawText,
+                entities: signal.entities as any,
+                eventType: signal.eventType,
+                amounts: signal.amounts as any,
+                dates: signal.dates as any,
+                locations: signal.locations as any,
+                sourceQuality: signal.sourceQuality,
+                rawMetadata: signal.rawMetadata as any,
+                triageScore: priority.score,
+                triageFactors: priority.factors as any,
+                triagedAt: new Date(),
+                documentId: doc.id,
+              },
+              create: {
+                sourceId: this.config.sourceId,
+                documentId: doc.id,
+                sourceType: signal.sourceType,
+                externalId: signal.externalId || signal.sourceUrl,
+                publishedAt: signal.publishedAt,
+                retrievedAt: signal.retrievedAt,
+                title: signal.title,
+                rawText: signal.rawText,
+                entities: signal.entities as any,
+                eventType: signal.eventType,
+                amounts: signal.amounts as any,
+                dates: signal.dates as any,
+                locations: signal.locations as any,
+                sourceUrl: signal.sourceUrl,
+                sourceQuality: signal.sourceQuality,
+                rawMetadata: signal.rawMetadata as any,
+                triageScore: priority.score,
+                triageFactors: priority.factors as any,
+                triagedAt: new Date(),
+              },
+            });
+          }
+
           // Store evidence items
           for (const claim of extracted.claims) {
             await this.prisma.evidenceItem.create({
@@ -206,6 +256,27 @@ export abstract class BaseConnector {
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_|_$/g, '')
       .slice(0, 50);
+  }
+
+  private calculateSignalPriority(signal: NormalizedSignal): { score: number; factors: Record<string, number> } {
+    const largestAmount = Math.max(0, ...signal.amounts.map((amount) => amount.value || 0));
+    const daysOld = Math.max(0, Math.round((Date.now() - signal.publishedAt.getTime()) / 86400000));
+    const eventTypeScore = /award|approval|clearance|trial|patent|merger|contract/i.test(String(signal.eventType || '')) ? 85 : 45;
+    const amountScore = largestAmount >= 100_000_000 ? 95 : largestAmount >= 10_000_000 ? 75 : largestAmount > 0 ? 50 : 20;
+    const recencyScore = daysOld <= 1 ? 95 : daysOld <= 7 ? 70 : daysOld <= 30 ? 45 : 20;
+    const entityScore = signal.entities.length > 1 ? 70 : signal.entities.length === 1 ? 50 : 20;
+    const score = Math.round(
+      signal.sourceQuality * 0.25 +
+      eventTypeScore * 0.25 +
+      amountScore * 0.25 +
+      recencyScore * 0.15 +
+      entityScore * 0.10
+    );
+
+    return {
+      score: Math.max(1, Math.min(100, score)),
+      factors: { sourceQuality: signal.sourceQuality, eventTypeScore, amountScore, recencyScore, entityScore },
+    };
   }
 
   private async startRun(): Promise<string> {

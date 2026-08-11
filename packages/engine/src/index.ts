@@ -5,3 +5,10 @@ export { resolveEntity, resolveRelationship, createCandidateOpportunity } from '
 export { fetchLatestPrice, refreshSecurityPrice, calculatePriceReaction } from './market-data';
 export { analyzeHistoricalReactions, formatHistoricalSummary } from './historical';
 export type { HistoricalAnalysis } from './historical';
+export {
+  buildResearchPriorityInput,
+  classifyQualification,
+  createCatalystClusterFromSignal,
+  defaultResearchQuestions,
+  storeNormalizedSignal,
+} from './signal-intelligence';
