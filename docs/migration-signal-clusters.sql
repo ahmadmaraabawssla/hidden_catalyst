@@ -75,4 +75,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS catalyst_cluster_signals_cluster_signal_key
 
 ALTER TABLE opportunities
   ADD COLUMN IF NOT EXISTS cluster_id TEXT REFERENCES catalyst_clusters(id),
-  ADD COLUMN IF NOT EXISTS research_completeness DOUBLE PRECISION;
+  ADD COLUMN IF NOT EXISTS research_completeness DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS engine_version TEXT,
+  ADD COLUMN IF NOT EXISTS run_id TEXT,
+  ADD COLUMN IF NOT EXISTS last_researched_at TIMESTAMP(3);
+
+CREATE TABLE IF NOT EXISTS discovery_runs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'running',
+  engine_version TEXT NOT NULL,
+  target_candidates INTEGER,
+  max_scan INTEGER,
+  max_deep_research INTEGER,
+  funnel_screened INTEGER,
+  funnel_filing_candidates INTEGER,
+  funnel_deep_researched INTEGER,
+  funnel_qualified INTEGER,
+  funnel_rejected INTEGER,
+  funnel_watched INTEGER,
+  started_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP(3)
+);
+
+CREATE INDEX IF NOT EXISTS discovery_runs_started_at_idx
+  ON discovery_runs(started_at DESC);

@@ -75,6 +75,95 @@ function preScore(company, formType, filingDate) {
   return mcScore + formScore + recencyScore + alreadyProcessed;
 }
 
+function extractAmounts(text) {
+  var out = [];
+  var re = /\$\s?(\d+(?:\.\d+)?)\s?(million|billion|m|b)?/ig;
+  var m;
+  while ((m = re.exec(text || '')) && out.length < 10) {
+    var n = Number(m[1]);
+    var unit = (m[2] || '').toLowerCase();
+    if (unit === 'billion' || unit === 'b') n *= 1e9;
+    else if (unit === 'million' || unit === 'm') n *= 1e6;
+    out.push({ value: n, currency: 'USD', label: m[0], confidence: 0.75 });
+  }
+  return out;
+}
+
+function pricedInScore(priceReactionPct, volumeReactionRatio, fallback) {
+  if (priceReactionPct == null) return fallback;
+  var abs = Math.abs(priceReactionPct);
+  var score = abs < 0.5 ? 95 : abs < 1 ? 88 : abs < 2 ? 75 : abs < 3 ? 60 : abs < 5 ? 40 : 20;
+  if (volumeReactionRatio != null && volumeReactionRatio > 3) score -= 5;
+  return Math.max(5, Math.min(100, Math.round(score)));
+}
+
+async function storeSignalAndCluster(client, co, extraction, hash, evidenceQual, priorityScore) {
+  try {
+    await client.query(
+      `INSERT INTO signals(id,source_id,document_id,source_type,external_id,published_at,retrieved_at,title,raw_text,entities,event_type,amounts,dates,locations,source_url,source_quality,raw_metadata,triage_score,triage_factors,triaged_at,created_at)
+       VALUES($1,$2,$3,$4,$5,$6,NOW(),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NOW(),NOW())
+       ON CONFLICT(source_id, external_id) DO UPDATE SET triage_score=EXCLUDED.triage_score, triage_factors=EXCLUDED.triage_factors, triaged_at=NOW()`,
+      [
+        'sig_' + hash,
+        'source_sec_edgar',
+        'd_' + hash,
+        'sec_filing',
+        co.accessionNumber,
+        co.filingDate,
+        extraction?.insightTitle || `${co.ticker}: ${co.formType}`,
+        extraction?.eventSummary || extraction?.whyItMatters || '',
+        JSON.stringify([{ name: co.display_name, type: 'company', identifiers: { cik: String(co.cik), ticker: co.ticker }, confidence: 1 }]),
+        extraction?.eventType || co.formType,
+        JSON.stringify(extractAmounts(JSON.stringify(extraction || {}))),
+        JSON.stringify([{ value: co.filingDate, label: 'filing_date', confidence: 1 }]),
+        JSON.stringify([]),
+        `https://www.sec.gov/cgi-bin/browse-edgar?CIK=${co.cik}`,
+        evidenceQual,
+        JSON.stringify({ formType: co.formType, accessionNumber: co.accessionNumber, runId: RUN_ID }),
+        priorityScore,
+        JSON.stringify({ preScore: co.preScore, marketCap: co.mc, formType: co.formType })
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO catalyst_clusters(id,title,thesis,cluster_type,status,materiality_json,attention_json,adversarial_json,research_questions,research_completeness,research_confidence,priority_score,priority_factors,first_seen_at,created_at,updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW())
+       ON CONFLICT(id) DO NOTHING`,
+      [
+        'cl_' + hash,
+        extraction?.insightTitle || `${co.ticker}: ${co.formType} catalyst`,
+        extraction?.hiddenAngle?.claim || null,
+        extraction?.eventType || co.formType,
+        extraction?.verificationStatus === 'verified' ? 'qualified' : 'triaged',
+        JSON.stringify(extraction?.financialMateriality || {}),
+        JSON.stringify({ catalystAttentionScore: extraction?.catalystAttentionScore || null }),
+        JSON.stringify({ contradictions: extraction?.contradictions || [], missingInfo: extraction?.missingInfo || [] }),
+        JSON.stringify([
+          'What exactly changed in the public record?',
+          'Which listed companies are economically exposed?',
+          'How direct is the relationship?',
+          'What is the measurable financial magnitude?',
+          'Has attention or price already reacted?',
+          'What evidence weakens this thesis?'
+        ]),
+        Math.round((extraction?.verificationConfidence || 0.7) * 100),
+        Math.round((extraction?.verificationConfidence || 0.7) * 100),
+        priorityScore,
+        JSON.stringify({ preScore: co.preScore, pipeline: 'daily-top20-v4' }),
+        co.filingDate
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO catalyst_cluster_signals(id,cluster_id,signal_id,role,confidence,created_at)
+       VALUES($1,$2,$3,'primary',1,NOW()) ON CONFLICT(cluster_id, signal_id) DO NOTHING`,
+      ['cls_' + hash, 'cl_' + hash, 'sig_' + hash]
+    );
+  } catch (e) {
+    console.log(`  ⚠ ${co.ticker}: signal/cluster write skipped — ${(e.message || '').slice(0, 80)}`);
+  }
+}
+
 // ─── Main Pipeline ───
 async function main() {
   const client = new Client({ connectionString: DB });
@@ -139,7 +228,7 @@ async function main() {
   console.log('Deep research (max ' + MAX_DEEP_RESEARCH + ' calls, stop at ' + TARGET_CANDIDATES + ' qualified)...\n');
 
   // Phase 2: Deep research — budget-based
-  var deepResearched = 0, qualified = 0, rejected = 0, watched = 0;
+  var deepResearched = 0, qualified = 0, rejected = 0, watched = 0, published = 0;
 
   for (var idx = 0; idx < Math.min(scored.length, MAX_DEEP_RESEARCH); idx++) {
     if (qualified >= TARGET_CANDIDATES) {
@@ -152,22 +241,20 @@ async function main() {
 
     // Download filing text
     let filingText = '';
-    if (co.formType === '8-K') {
-      try {
-        const cik = String(co.cik).padStart(10, '0');
-        const accNoDash = co.accessionNumber.replace(/-/g, '');
-        const txtUrl = `https://www.sec.gov/Archives/edgar/data/${cik}/${accNoDash}/${co.accessionNumber}.txt`;
-        const txtRes = await fetch(txtUrl, {
-          headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12000)
-        });
-        if (txtRes.ok) {
-          filingText = await txtRes.text();
-          const ts = filingText.indexOf('<TEXT>');
-          filingText = ts > 0 ? filingText.slice(ts + 6) : filingText.slice(0, 12000);
-          filingText = filingText.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 10000);
-        }
-      } catch {}
-    }
+    try {
+      const cik = String(co.cik).padStart(10, '0');
+      const accNoDash = co.accessionNumber.replace(/-/g, '');
+      const txtUrl = `https://www.sec.gov/Archives/edgar/data/${cik}/${accNoDash}/${co.accessionNumber}.txt`;
+      const txtRes = await fetch(txtUrl, {
+        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12000)
+      });
+      if (txtRes.ok) {
+        filingText = await txtRes.text();
+        const ts = filingText.indexOf('<TEXT>');
+        filingText = ts > 0 ? filingText.slice(ts + 6) : filingText.slice(0, 12000);
+        filingText = filingText.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 10000);
+      }
+    } catch {}
 
     // ── Build company context: recent filing history for the LLM ──
     let companyContext = '';
@@ -218,10 +305,13 @@ async function main() {
     if (!extraction || !extraction.qualified) {
       var reason = extraction?.isRoutine ? 'routine_filing' : 'no_hidden_angle';
       const verStatus = extraction?.isRoutine ? 'rejected' : 'watch';
+      if (verStatus === 'rejected') rejected++;
+      else watched++;
       const hiddenAngle = extraction?.hiddenAngle || null;
 
       // Store as rejected/watch for audit trail
       const hash = 'dly_' + co.cik + '_' + co.accessionNumber.replace(/-/g, '').slice(0, 14);
+      const lifecycleStatus = verStatus === 'watch' ? 'published' : 'rejected';
       const title = extraction
         ? `[${verStatus.toUpperCase()}] ${co.display_name} (${co.ticker}) — ${co.formType}`
         : `${co.display_name} (${co.ticker}) — ${co.formType} (skipped)`;
@@ -229,9 +319,10 @@ async function main() {
       try {
         await client.query(
           `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,engine_version,run_id,last_researched_at,created_at,updated_at)
-           VALUES($1,$2,$3,$4,'rejected',$5,$6,$7,'` + ENGINE_VERSION + `','` + RUN_ID + `',NOW(),NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,'` + ENGINE_VERSION + `','` + RUN_ID + `',NOW(),NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
           ['o_' + hash, co.sec_id, title,
-           `[Rejected: ${reason}] ${co.display_name} filed ${co.formType} on ${co.filingDate}. No hidden angle identified.`,
+           `[${verStatus.toUpperCase()}: ${reason}] ${co.display_name} filed ${co.formType} on ${co.filingDate}.`,
+           lifecycleStatus,
            verStatus,
            hiddenAngle ? JSON.stringify(hiddenAngle) : null,
            co.filingDate]
@@ -247,6 +338,8 @@ async function main() {
     }
 
     // ── Build and store — V3 scoring (only for qualified opportunities) ──
+    qualified++;
+
     const materiality = extraction?.materialityScore || (co.formType === '8-K' ? 65 : 55);
     const mc = co.mc;
     const daysSince = Math.round((Date.now() - new Date(co.filingDate).getTime()) / 86400000);
@@ -259,7 +352,7 @@ async function main() {
     else if (mc < 10e9) companyAttn = 5; else companyAttn = 2;
 
     // ── V4e: Real catalyst attention measurement ──
-    let attentionProfile = { attentionScore: catalystAttn, pressRelease: { found: false, count: 0 }, news: { count: 0, sentiment: 0 }, source: 'estimate' };
+    let attentionProfile = { attentionScore: extraction?.catalystAttentionScore || 50, pressRelease: { found: false, count: 0 }, news: { count: 0, sentiment: 0 }, source: 'estimate' };
     try {
       if (process.env.FMP_API_KEY && extraction) {
         var keywords = [];
@@ -314,9 +407,11 @@ async function main() {
     const catalystStr = Math.min(95, Math.max(30, materiality));
     const finMateriality = Math.min(95, Math.max(25, materiality));
     const timing = daysSince <= 1 ? 95 : daysSince <= 3 ? 85 : daysSince <= 7 ? 70 : daysSince <= 14 ? 50 : 30;
-    const priceReaction = priceReactionPct != null
-      ? Math.min(90, Math.max(30, Math.round(Math.abs(priceReactionPct) * 2 + 40)))
-      : Math.min(90, Math.max(30, catalystAttn + (daysSince <= 3 ? 15 : 0)));
+    const priceReaction = pricedInScore(
+      priceReactionPct,
+      volumeReactionPct,
+      Math.min(90, Math.max(30, catalystAttn + (daysSince <= 3 ? 15 : 0)))
+    );
     const riskScore = mc < 100e6 ? 60 : mc < 300e6 ? 50 : mc < 1e9 ? 40 : mc < 5e9 ? 30 : 20;
     const liquidityPenalty = mc < 100e6 ? 35 : mc < 300e6 ? 20 : mc < 1e9 ? 10 : 0;
 
@@ -346,9 +441,10 @@ async function main() {
         'INSERT INTO evidence_items(id,document_id,excerpt,evidence_type,quality_score,created_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(id) DO NOTHING',
         ['e_' + hash, 'd_' + hash, (extraction?.verifiedFacts[0] || summary).slice(0, 500), 'primary', evidenceQual]
       );
+      const visibleStatus = ['candidate', 'verified'].includes(extraction?.verificationStatus) ? 'published' : 'candidate';
       await client.query(
         `INSERT INTO opportunities(id,security_id,title,summary,status,verification_status,hidden_angle,detected_at,price_change_pct,volume_change_pct,engine_version,run_id,last_researched_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'` + ENGINE_VERSION + `','` + RUN_ID + `',NOW(),NOW(),NOW()) ON CONFLICT(id) DO NOTHING`,
-        ['o_' + hash, co.sec_id, title, summary, 'candidate',
+        ['o_' + hash, co.sec_id, title, summary, visibleStatus,
          extraction?.verificationStatus || 'candidate',
          extraction?.hiddenAngle ? JSON.stringify(extraction.hiddenAngle) : null,
          co.filingDate,
@@ -379,6 +475,12 @@ async function main() {
           ['s_' + st + '_' + hash, 'o_' + hash, st, sv, JSON.stringify({ mc: mc, pipeline: 'daily-top20-v3' }), '3.0.0']
         );
       }
+
+      await storeSignalAndCluster(client, co, extraction, hash, evidenceQual, oppScore);
+      await client.query(
+        "UPDATE opportunities SET cluster_id=$1, research_completeness=$2 WHERE id=$3",
+        ['cl_' + hash, Math.round((extraction?.verificationConfidence || 0.7) * 100), 'o_' + hash]
+      ).catch(() => {});
 
       // Contradictions
       if (extraction?.contradictions && extraction.contradictions.length > 0) {
@@ -443,10 +545,10 @@ async function main() {
       }
 
       // Publish gate — only publish if verified status
-      if (evidenceQual >= 70 && riskScore <= 65 && extraction?.verificationStatus === 'verified') {
+      if (evidenceQual >= 70 && riskScore <= 65 && ['candidate', 'verified'].includes(extraction?.verificationStatus)) {
         await client.query("UPDATE opportunities SET status='published',published_at=NOW() WHERE id=$1", ['o_' + hash]);
         published++;
-      } else if (extraction?.verificationStatus === 'verified' && (evidenceQual < 70 || riskScore > 65)) {
+      } else if (['candidate', 'verified'].includes(extraction?.verificationStatus) && (evidenceQual < 70 || riskScore > 65)) {
         // LLM thinks it's verified but auto-gate disagrees — store as candidate for review
         await client.query("UPDATE opportunities SET status='candidate' WHERE id=$1", ['o_' + hash]);
       }

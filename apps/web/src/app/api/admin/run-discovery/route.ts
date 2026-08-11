@@ -10,6 +10,12 @@ const SKIP_FORMS = new Set(
   '3,4,5,3/A,4/A,144,N-PX,NPORT-P,N-CSR,N-CSRS,6-K,ARS,CERT,25,8-A12B,PX14A6G,S-8,424B2,FWP,25-NSE,SD'.split(',')
 );
 
+function isAuthorized(req: Request): boolean {
+  const configured = process.env.ADMIN_API_KEY;
+  if (!configured) return process.env.NODE_ENV !== 'production';
+  return req.headers.get('x-admin-api-key') === configured;
+}
+
 interface DiscoveryParams {
   batchSize: number;         // 5 | 10 | 20 | 50
   mcRange: 'micro' | 'small' | 'mid' | 'all';  // market cap filter
@@ -27,6 +33,10 @@ function buildMcFilter(mcRange: DiscoveryParams['mcRange']): { min?: number; max
 }
 
 export async function POST(req: Request) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   if (!KEY) {
     return NextResponse.json({ success: false, error: 'DeepSeek API key not configured' }, { status: 500 });
   }
@@ -48,7 +58,7 @@ export async function POST(req: Request) {
 
   const mcFilter = buildMcFilter(params.mcRange);
   const steps: string[] = [];
-  let published = 0;
+  let candidatesCreated = 0;
 
   try {
     // ── Step 1: Get candidates ──
@@ -242,9 +252,9 @@ export async function POST(req: Request) {
             securityId: co.sec_id,
             title: tl,
             summary: sm,
-            status: 'published',
+            status: 'candidate',
+            verificationStatus: 'candidate',
             detectedAt: new Date(co.filingDate),
-            publishedAt: new Date(),
           },
         }).catch(() => {});
 
@@ -331,7 +341,7 @@ export async function POST(req: Request) {
         }
 
         steps.push(`✅ ${co.ticker}: score ${sc} — "${(p.eventSummary || '').slice(0, 50)}..."`);
-        published++;
+        candidatesCreated++;
       } catch (e: any) {
         steps.push(`⚠ ${co.ticker}: ${e.message?.slice(0, 60) || 'processing error'}`);
       }
@@ -340,7 +350,8 @@ export async function POST(req: Request) {
     return NextResponse.json({
       success: true,
       steps,
-      published,
+      published: 0,
+      candidatesCreated,
       tickers: top.map((c: any) => c.ticker),
     });
   } catch (err: any) {

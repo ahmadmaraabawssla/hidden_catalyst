@@ -6,7 +6,17 @@ import path from 'path';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5 minutes — enough for pipeline
 
+function isAuthorized(req: NextRequest): boolean {
+  const configured = process.env.ADMIN_API_KEY;
+  if (!configured) return process.env.NODE_ENV !== 'production';
+  return req.headers.get('x-admin-api-key') === configured;
+}
+
 export async function POST(req: NextRequest) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   const body = await req.json().catch(() => ({}));
   const runId = 'run_' + new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15);
   const targetCandidates = body.targetCandidates || 20;

@@ -69,7 +69,7 @@ export default function RunDiscoveryButton() {
       }
 
       setSteps(data.steps);
-      setCount(data.published);
+      setCount(data.candidatesCreated ?? data.published ?? 0);
       setTickers(data.tickers || []);
       setStatus('done');
       router.refresh();
@@ -102,7 +102,7 @@ export default function RunDiscoveryButton() {
             Running Discovery...
           </span>
         ) : status === 'done' ? (
-          `✅ ${count} published — Discover More`
+          `✅ ${count} candidates — Discover More`
         ) : (
           '🔍 Run Discovery'
         )}
@@ -199,8 +199,8 @@ export default function RunDiscoveryButton() {
           ))}
           {status === 'done' && count > 0 && (
             <div className="mt-2 pt-2 border-t border-green-200">
-              <a href="/feed" className="text-green-700 font-semibold hover:underline">
-                View {count} new {count === 1 ? 'opportunity' : 'opportunities'} in feed →
+              <a href="/admin/review" className="text-green-700 font-semibold hover:underline">
+                View review queue →
               </a>
               {tickers.length > 0 && (
                 <div className="mt-1 text-green-600">

@@ -318,6 +318,9 @@ model Opportunity {
   publishedAt  DateTime? @map("published_at")
   confidence   Float?
   researchCompleteness Float? @map("research_completeness")
+  engineVersion String? @map("engine_version")
+  runId        String?  @map("run_id")
+  lastResearchedAt DateTime? @map("last_researched_at")
   reviewerId   String?  @map("reviewer_id")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
@@ -338,6 +341,25 @@ model Opportunity {
   priceReactionDate      DateTime? @map("price_reaction_date")
 
   @@map("opportunities")
+}
+
+model DiscoveryRun {
+  id                    String   @id
+  status                String   @default("running")
+  engineVersion         String   @map("engine_version")
+  targetCandidates      Int?     @map("target_candidates")
+  maxScan               Int?     @map("max_scan")
+  maxDeepResearch       Int?     @map("max_deep_research")
+  funnelScreened        Int?     @map("funnel_screened")
+  funnelFilingCandidates Int?    @map("funnel_filing_candidates")
+  funnelDeepResearched  Int?     @map("funnel_deep_researched")
+  funnelQualified       Int?     @map("funnel_qualified")
+  funnelRejected        Int?     @map("funnel_rejected")
+  funnelWatched         Int?     @map("funnel_watched")
+  startedAt             DateTime @default(now()) @map("started_at")
+  completedAt           DateTime? @map("completed_at")
+
+  @@map("discovery_runs")
 }
 
 model Claim {

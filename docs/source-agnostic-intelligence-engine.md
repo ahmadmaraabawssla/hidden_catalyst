@@ -116,3 +116,20 @@ The feed should show opportunity score separately from research confidence and r
 - Engine helpers: `packages/engine/src/signal-intelligence.ts`
 - Connector contract: `ExtractionResult.signals`
 - SQL migration: `docs/migration-signal-clusters.sql`
+
+## Screener Role
+
+The SEC screener is no longer the product architecture. It is the first signal harvester.
+
+The trusted path is:
+
+```text
+scripts/daily-top20.js
+  -> SEC filing candidate
+  -> normalized signal
+  -> catalyst cluster
+  -> candidate / verified / watch status
+  -> feed or review queue
+```
+
+The older `/api/admin/run-discovery` route is retained as a manual legacy candidate generator, but it should not publish directly to the feed.
