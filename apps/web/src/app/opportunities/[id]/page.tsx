@@ -110,6 +110,20 @@ function extractTrueUpMechanics(text: string) {
   };
 }
 
+function CheckStatusBadge({ status }: { status: 'verified' | 'partial' | 'pending' | 'failed' }) {
+  const styles = {
+    verified: 'bg-green-100 text-green-700',
+    partial: 'bg-amber-100 text-amber-700',
+    pending: 'bg-gray-100 text-gray-600',
+    failed: 'bg-red-100 text-red-700',
+  };
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${styles[status]}`}>
+      {status}
+    </span>
+  );
+}
+
 function verStatusLabel(s: string | null): { label: string; color: string } {
   switch (s) {
     case 'verified': return { label: 'Verified', color: 'bg-green-100 text-green-800' };
@@ -284,6 +298,81 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const catalystAttentionPending = attention == null && scores.catalyst_attention == null;
   const finalScorePending = missingCashOrMarketCap || missingShareData || opp.priceChangePercent == null || catalystAttentionPending || (hasDefinedPriceVariable && /measurement date|definition of commitment fee price|exact definition/i.test(researchText));
   const trueUpMechanics = extractTrueUpMechanics(researchText);
+  const hasReferencedAgreement = facts.some((f: any) => /\[ref:|referenced agreement|purchase agreement|eloc/i.test(f.text || ''));
+  const hasFormula = facts.some((f: any) => /formula|true-up amount|commitment fee price/i.test(f.text || '')) || !!trueUpMechanics;
+  const hasMinimumPrice = facts.some((f: any) => /minimum price/i.test(f.text || ''));
+  const researchChecks = [
+    {
+      status: facts.length > 0 ? 'verified' as const : 'pending' as const,
+      source: evidence[0]?.document?.source?.name || clusterSignals[0]?.source_type || 'Primary source',
+      check: 'Primary filing reviewed',
+      result: facts.length > 0 ? `${facts.length} verified fact${facts.length === 1 ? '' : 's'} extracted` : 'No extracted facts available yet',
+      why: 'Establishes that the catalyst starts from a public source rather than model-only inference.',
+    },
+    {
+      status: hasFormula ? 'verified' as const : 'pending' as const,
+      source: 'SEC filing / amendment',
+      check: 'Mechanism or formula extracted',
+      result: trueUpMechanics ? `Formula scenarios available using ${trueUpMechanics.factor.toLocaleString()} x Commitment Fee Price` : 'Formula or mechanic not fully extracted yet',
+      why: 'Turns a legal clause into testable contract mechanics.',
+    },
+    {
+      status: hasReferencedAgreement && hasMinimumPrice ? 'verified' as const : hasReferencedAgreement ? 'partial' as const : 'pending' as const,
+      source: 'Referenced agreement',
+      check: 'Cross-document terms resolved',
+      result: hasMinimumPrice ? 'Minimum Price resolved from referenced agreement' : 'Referenced agreement detected; critical terms still need resolution',
+      why: 'Prevents the system from stopping at the first filing when key definitions live elsewhere.',
+    },
+    {
+      status: hasDefinedPriceVariable ? 'partial' as const : 'pending' as const,
+      source: 'Contract definitions',
+      check: 'Trigger variable verified',
+      result: hasDefinedPriceVariable ? 'Defined price variable detected; spot price treated only as early-warning context' : 'No defined trigger variable found yet',
+      why: 'Avoids substituting market price for a contractual calculation.',
+    },
+    {
+      status: missingCashOrMarketCap ? 'pending' as const : 'verified' as const,
+      source: 'Market data / financial statements',
+      check: 'Materiality denominator checked',
+      result: missingCashOrMarketCap ? 'Cash, market cap, revenue, assets, or EV still needed' : 'Denominator available for materiality math',
+      why: 'A dollar amount is only material relative to company scale.',
+    },
+    {
+      status: missingShareData ? 'partial' as const : 'verified' as const,
+      source: 'Capital structure data',
+      check: 'Share and settlement mechanics checked',
+      result: missingShareData ? 'Share count, settlement mechanics, or ELOC usage still unresolved' : 'Capital structure inputs available',
+      why: 'Separates cash exposure from dilution exposure.',
+    },
+    {
+      status: opp.priceChangePercent != null ? 'verified' as const : 'pending' as const,
+      source: 'Market data',
+      check: 'Price reaction measured',
+      result: opp.priceChangePercent != null ? `${opp.priceChangePercent.toFixed(2)}% since filing` : 'Filing-window reaction not computed yet',
+      why: 'Helps decide whether the catalyst is already priced in.',
+    },
+    {
+      status: catalystAttentionPending ? 'pending' as const : 'verified' as const,
+      source: 'Attention engine',
+      check: 'Catalyst attention measured',
+      result: catalystAttentionPending ? 'Media, analyst, and catalyst-specific coverage still pending' : 'Catalyst attention score available',
+      why: 'Information asymmetry should not be asserted before attention is measured.',
+    },
+  ];
+  const researchSources = [
+    ...clusterSignals.map((signal: any) => ({
+      label: signal.source_type || 'Signal source',
+      detail: signal.title || signal.event_type || 'Normalized signal',
+      href: signal.source_url,
+      type: 'Normalized signal',
+    })),
+    ...evidence.slice(0, 4).map((ev: any) => ({
+      label: ev.document?.source?.name || 'Evidence source',
+      detail: ev.document?.title || ev.excerpt || 'Evidence item',
+      href: ev.document?.canonicalUrl,
+      type: ev.evidenceType || 'evidence',
+    })),
+  ];
 
   return (
     <div className="page-container">
@@ -358,7 +447,80 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
         )}
       </section>
 
-      {/* ── WHAT HIDDEN CATALYST CONNECTED ── */}
+      {/* ── RESEARCH REPORT SUMMARY ── */}
+      <section className="mb-8 grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
+        <div className="card">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Analyst Verdict</h2>
+          <div className="space-y-3">
+            <div>
+              <div className="text-xs font-medium uppercase text-gray-500">Current read</div>
+              <p className="mt-1 text-sm font-medium text-gray-900">
+                {hiddenAngle?.claim ? 'Promising public-signal candidate, still verification-limited.' : 'No validated thesis yet.'}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg bg-gray-50 p-3">
+                <div className="text-xl font-bold text-gray-900">{finalScorePending ? 'Pending' : Math.round(scores.opportunity ?? 0)}</div>
+                <div className="text-xs text-gray-500">{finalScorePending ? 'Final score' : 'Opportunity score'}</div>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-3">
+                <div className="text-xl font-bold text-gray-900">{researchCompleteness || 0}%</div>
+                <div className="text-xs text-gray-500">Research complete</div>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500">
+              The report separates verified facts, contract mechanics, pending denominators, market reaction, and attention analysis. A candidate can be interesting before it is high-conviction.
+            </p>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Research Checks</h2>
+          <div className="space-y-2">
+            {researchChecks.map((check, i) => (
+              <div key={i} className="rounded-lg border border-gray-100 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-gray-900">{check.check}</div>
+                  <CheckStatusBadge status={check.status} />
+                </div>
+                <div className="mt-1 text-xs text-gray-500">{check.source}</div>
+                <p className="mt-1 text-sm text-gray-700">{check.result}</p>
+                <p className="mt-1 text-xs text-gray-400">{check.why}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="mb-8 card">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <h2 className="text-base font-semibold text-gray-900">Research Sources</h2>
+          <span className="text-xs text-gray-400">{researchSources.length} source records</span>
+        </div>
+        {researchSources.length > 0 ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            {researchSources.map((source, i) => {
+              const body = (
+                <div className="rounded-lg border border-gray-100 p-3 hover:bg-gray-50">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge>{source.type}</Badge>
+                    <span className="text-sm font-semibold text-gray-900">{source.label}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">{textOf(source.detail).slice(0, 180)}</p>
+                </div>
+              );
+              return source.href ? (
+                <a key={i} href={source.href} target="_blank" rel="noreferrer">{body}</a>
+              ) : (
+                <div key={i}>{body}</div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">No normalized source records linked yet. Legacy evidence may still appear lower on the page.</p>
+        )}
+      </section>
+
       <section className="mb-8 p-5 rounded-xl bg-gray-50 border border-gray-200">
         <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
           What Hidden Catalyst Connected
