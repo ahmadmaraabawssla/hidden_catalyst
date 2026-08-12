@@ -16,6 +16,80 @@ function fmpKey() {
   return process.env.FMP_API_KEY || '';
 }
 
+function numberOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export interface FinancialDenominators {
+  revenue: number | null;
+  cash: number | null;
+  assets: number | null;
+  enterpriseValue: number | null;
+  currentShares: number | null;
+}
+
+const NULL_FINANCIALS: FinancialDenominators = {
+  revenue: null,
+  cash: null,
+  assets: null,
+  enterpriseValue: null,
+  currentShares: null,
+};
+
+/**
+ * Fetch revenue / cash / assets / shares from FMP income-statement and
+ * balance-sheet statements, compute enterprise value, and cache the result
+ * into security.attributes so computeMateriality() has a real denominator
+ * (stops returning UNKNOWN). Returns the computed denominators.
+ */
+export async function enrichFinancialDenominators(
+  security: { id: string; ticker: string; marketCap: number | null }
+): Promise<FinancialDenominators> {
+  const key = fmpKey();
+  if (!key) return NULL_FINANCIALS;
+
+  try {
+    const [incRes, bsRes] = await Promise.all([
+      fetch(`${FMP}/income-statement?symbol=${security.ticker}&period=annual&limit=1&apikey=${key}`),
+      fetch(`${FMP}/balance-sheet-statement?symbol=${security.ticker}&period=annual&limit=1&apikey=${key}`),
+    ]);
+    const inc = incRes.ok ? (await incRes.json()) : [];
+    const bs = bsRes.ok ? (await bsRes.json()) : [];
+    const income = Array.isArray(inc) ? inc[0] : null;
+    const balance = Array.isArray(bs) ? bs[0] : null;
+
+    const revenue = numberOrNull(income?.revenue);
+    // cashAndShortTermInvestments is the broadest cash measure and already
+    // includes cashAndCashEquivalents — use it directly, do not sum both.
+    const cash = numberOrNull(balance?.cashAndShortTermInvestments ?? balance?.cashAndCashEquivalents);
+    const assets = numberOrNull(balance?.totalAssets);
+    const totalDebt = numberOrNull(balance?.totalDebt);
+    const currentShares = numberOrNull(income?.weightedAverageShsOutDil ?? income?.weightedAverageShsOut);
+    const marketCap = security.marketCap ?? null;
+    const enterpriseValue =
+      marketCap != null && totalDebt != null && cash != null
+        ? marketCap + totalDebt - cash
+        : marketCap;
+
+    const patch = {
+      revenue,
+      cash,
+      assets,
+      totalDebt,
+      currentShares,
+      enterpriseValue,
+      financials_asof: new Date().toISOString(),
+    };
+
+    await prisma.$executeRaw`UPDATE securities SET attributes = COALESCE(attributes, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb, updated_at = NOW() WHERE id = ${security.id}`;
+
+    return { revenue, cash, assets, enterpriseValue, currentShares };
+  } catch {
+    return NULL_FINANCIALS;
+  }
+}
+
 /**
  * Fetch latest price for a single ticker via FMP profile endpoint.
  */
