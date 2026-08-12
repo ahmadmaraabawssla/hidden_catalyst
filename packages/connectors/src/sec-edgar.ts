@@ -23,26 +23,34 @@ export class SECEdgarConnector extends BaseConnector {
 
   async fetchDocuments(since?: Date): Promise<RawDocument[]> {
     const sinceDate = since || new Date(Date.now() - 7 * 86400000);
+    const maxCompanies = Number(process.env.SEC_SCAN_LIMIT || 500);
 
     // Only listed companies with a CIK and at least one active security on a
-    // major exchange. The global FTS search (`q=*`) is unsuitable for a large
-    // universe and rate-limits badly, so we query each company's own submission
-    // history directly — this is the reliable, SEC-blessed endpoint.
+    // major exchange. Sort by market cap ascending (smallest = most likely
+    // overlooked) and bound the universe — a full 8k-company scan is too slow
+    // for a scheduled run and the marginal value of larger caps is low.
     const companies = await this.prisma.company.findMany({
       where: {
         cik: { not: null },
         securities: { some: { active: true, exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] } } },
       },
+      take: maxCompanies,
       select: {
         cik: true,
         displayName: true,
-        securities: { where: { active: true }, select: { ticker: true, exchange: true }, take: 1 },
+        securities: { where: { active: true }, select: { ticker: true, exchange: true, marketCap: true }, take: 1 },
       },
     });
 
+    // Prefer smallest market cap within the bounded set
+    companies.sort((a, b) =>
+      (a.securities[0]?.marketCap ?? Number.MAX_SAFE_INTEGER) -
+      (b.securities[0]?.marketCap ?? Number.MAX_SAFE_INTEGER)
+    );
+
     if (companies.length === 0) return [];
 
-    console.log(`[SEC EDGAR] Checking ${companies.length} listed companies for recent filings...`);
+    console.log(`[SEC EDGAR] Checking ${companies.length} listed companies (bounded to ${maxCompanies}) for recent filings...`);
 
     const materialForms = new Set(['8-K', '10-Q', '10-K', 'S-1', '13D', '13G']);
     const skipForms = new Set(['3', '4', '5', '3/A', '4/A', '144', 'N-PX', 'NPORT-P', 'N-CSR', 'N-CSRS', '6-K', 'ARS', 'CERT', '25', '8-A12B', 'PX14A6G', 'S-8', '424B2', 'FWP', '25-NSE', 'SD']);
