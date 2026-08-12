@@ -47,8 +47,20 @@ function softenContractVariableClaims(text: unknown): string {
     'triggered by a decline in the contractual Commitment Fee Price'
   );
   output = output.replace(
+    /cash position vulnerable to its own share price performance/gi,
+    'cash position sensitive to a contract-defined price calculation'
+  );
+  output = output.replace(
     /directly tied to the stock price/gi,
     'tied to a defined contractual price calculation'
+  );
+  output = output.replace(
+    /if the stock price stays above,?\s*no cash is owed/gi,
+    'if the contractual Commitment Fee Price is at or above the Minimum Price, no true-up cash payment is indicated by the formula'
+  );
+  output = output.replace(
+    /the market may not have (?:fully )?priced (?:this|it) in[^.]*\./gi,
+    'Market attention and price reaction are still pending, so priced-in status is not yet established.'
   );
   output = output.replace(
     /stock price drops below/gi,
@@ -295,7 +307,13 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const hasDefinedPriceVariable = usesDefinedContractPrice(researchText);
   const missingCashOrMarketCap = !opp.security.marketCap || missingInfo.some((r: any) => /cash|liquidity|market cap|market capitalization/i.test(r.description || ''));
   const missingShareData = missingInfo.some((r: any) => /share count|shares outstanding|settled in shares|settlement|warrant|eloc usage/i.test(r.description || ''));
-  const catalystAttentionPending = attention == null && scores.catalyst_attention == null;
+  const catalystAttentionMeasured = attention != null && (
+    attention.catalystAttentionScore != null ||
+    attention.catalyst_attention_score != null ||
+    attention.catalystArticles != null ||
+    attention.mediaFrequency != null
+  );
+  const catalystAttentionPending = !catalystAttentionMeasured;
   const finalScorePending = missingCashOrMarketCap || missingShareData || opp.priceChangePercent == null || catalystAttentionPending || (hasDefinedPriceVariable && /measurement date|definition of commitment fee price|exact definition/i.test(researchText));
   const trueUpMechanics = extractTrueUpMechanics(researchText);
   const hasReferencedAgreement = facts.some((f: any) => /\[ref:|referenced agreement|purchase agreement|eloc/i.test(f.text || ''));
@@ -419,7 +437,11 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
         </h2>
         {hiddenAngle ? (
           <div className="space-y-3">
-            <p className="text-base font-medium text-gray-900">{softenContractVariableClaims(hiddenAngle.claim)}</p>
+            <p className="text-base font-medium text-gray-900">
+              {hasDefinedPriceVariable
+                ? 'The filing identifies a potential cash true-up tied to a contractual Commitment Fee Price calculation. Spot stock price may be useful early-warning context, but the actual trigger depends on the contract-defined measurement.'
+                : softenContractVariableClaims(hiddenAngle.claim)}
+            </p>
             {hiddenAngle.supporting_evidence && (
               <div className="pl-3 border-l-2 border-brand-300">
                 <span className="text-xs text-gray-500 font-medium">Evidence</span>
@@ -522,6 +544,53 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
       </section>
 
       <section className="mb-8 p-5 rounded-xl bg-gray-50 border border-gray-200">
+        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+          What Hidden Catalyst Connected
+        </h2>
+        <div className="space-y-2 text-sm">
+          {[
+            {
+              title: clusterSignals[0]?.title || evidence[0]?.document?.title || 'Primary public filing',
+              detail: clusterSignals[0]?.source_type || evidence[0]?.document?.source?.name || 'Public source',
+              status: 'Primary',
+            },
+            {
+              title: hasFormula ? 'True-up formula extracted' : 'Contract mechanism pending extraction',
+              detail: trueUpMechanics ? `$${trueUpMechanics.maxLiability.toLocaleString()} - (${trueUpMechanics.factor.toLocaleString()} x Commitment Fee Price)` : 'Formula not available',
+              status: hasFormula ? 'Verified' : 'Pending',
+            },
+            {
+              title: hasMinimumPrice ? 'Referenced agreement resolved' : 'Referenced agreement needs resolution',
+              detail: hasMinimumPrice ? 'Minimum Price resolved from referenced agreement' : 'Critical defined terms still pending',
+              status: hasMinimumPrice ? 'Verified' : 'Partial',
+            },
+            {
+              title: hasDefinedPriceVariable ? 'Trigger variable remains contract-defined' : 'Trigger variable pending',
+              detail: hasDefinedPriceVariable ? 'Spot price is only early-warning context unless the contract defines equivalence' : 'No defined trigger variable detected',
+              status: 'Guardrail',
+            },
+            {
+              title: 'Market and materiality context',
+              detail: `${opp.security.ticker} ${opp.security.latestPrice ? formatPrice(opp.security.latestPrice) : 'price pending'}; ${missingCashOrMarketCap ? 'cash/market-cap denominator pending' : 'denominator available'}`,
+              status: missingCashOrMarketCap ? 'Pending' : 'Verified',
+            },
+          ].map((node, i, arr) => (
+            <div key={i} className="relative pl-6">
+              {i < arr.length - 1 && <div className="absolute left-[7px] top-6 bottom-[-8px] w-0.5 bg-gray-200" />}
+              <div className="absolute left-0 top-1.5 h-3.5 w-3.5 rounded-full border-2 border-brand-400 bg-white" />
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge>{node.status}</Badge>
+                  <span className="font-semibold text-gray-900">{node.title}</span>
+                </div>
+                <p className="mt-1 text-xs text-gray-500">{node.detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="hidden">
         <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
           What Hidden Catalyst Connected
         </h2>
@@ -849,7 +918,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                     <h3 className="text-xs font-semibold text-red-700 uppercase mb-1">Cash Exposure</h3>
                     <p className="text-sm text-gray-800">
                       <span className="font-mono font-semibold">{hiddenAngle.cashExposure.amount || 'Unknown'}</span>
-                      {hiddenAngle.cashExposure.trigger && <span> — {hiddenAngle.cashExposure.trigger}</span>}
+                      {hiddenAngle.cashExposure.trigger && <span> — {softenContractVariableClaims(hiddenAngle.cashExposure.trigger)}</span>}
                     </p>
                     {hiddenAngle.cashExposure.likelihood && (
                       <span className="text-xs text-gray-500">Likelihood: {hiddenAngle.cashExposure.likelihood}</span>
@@ -859,23 +928,31 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 {hiddenAngle.dilutionExposure && (
                   <div className="p-3 bg-amber-50 rounded-lg border border-amber-100">
                     <h3 className="text-xs font-semibold text-amber-700 uppercase mb-1">Equity Dilution</h3>
-                    <p className="text-sm text-gray-800">
-                      {hiddenAngle.dilutionExposure.potentialShares && (
-                        <span className="font-mono font-semibold">{hiddenAngle.dilutionExposure.potentialShares} shares</span>
-                      )}
-                      {hiddenAngle.dilutionExposure.pctOfOutstanding && (
-                        <span className="font-mono font-semibold"> ({hiddenAngle.dilutionExposure.pctOfOutstanding})</span>
-                      )}
-                    </p>
-                    {hiddenAngle.dilutionExposure.terms && (
-                      <p className="text-xs text-gray-500 mt-0.5">{hiddenAngle.dilutionExposure.terms}</p>
+                    {hasDefinedPriceVariable && /settle|settlement|true-up/i.test(textOf(hiddenAngle.dilutionExposure.terms)) ? (
+                      <p className="text-sm text-gray-800">
+                        <span className="font-semibold">Direct true-up dilution: Unverified.</span> The amendment appears to describe a cash true-up. Any equity-settlement mechanism for the true-up has not yet been confirmed. Separately, the broader financing facility may create dilution through share issuance.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-sm text-gray-800">
+                          {hiddenAngle.dilutionExposure.potentialShares && (
+                            <span className="font-mono font-semibold">{hiddenAngle.dilutionExposure.potentialShares} shares</span>
+                          )}
+                          {hiddenAngle.dilutionExposure.pctOfOutstanding && (
+                            <span className="font-mono font-semibold"> ({hiddenAngle.dilutionExposure.pctOfOutstanding})</span>
+                          )}
+                        </p>
+                        {hiddenAngle.dilutionExposure.terms && (
+                          <p className="text-xs text-gray-500 mt-0.5">{softenContractVariableClaims(hiddenAngle.dilutionExposure.terms)}</p>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
                 {hiddenAngle.capitalOverhang && (
                   <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
                     <h3 className="text-xs font-semibold text-gray-600 uppercase mb-1">Capital Structure Overhang</h3>
-                    <p className="text-sm text-gray-700">{hiddenAngle.capitalOverhang}</p>
+                    <p className="text-sm text-gray-700">{softenContractVariableClaims(hiddenAngle.capitalOverhang)}</p>
                   </div>
                 )}
               </div>
