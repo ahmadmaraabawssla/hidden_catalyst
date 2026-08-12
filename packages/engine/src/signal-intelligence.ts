@@ -10,6 +10,7 @@ import { computeMateriality, extractLargestAmount } from './materiality';
 import { runDeterministicAdversarialCheck } from './adversarial';
 import { buildResearchReport } from './research-report';
 import type { ResearchReport } from './research-report';
+import { createDefaultResearchRegistry, mergeDeepResearch, type DeepResearchCompanyContext } from './deep-research';
 
 const MATERIAL_EVENT_TYPES = new Set([
   'contract_award',
@@ -36,7 +37,7 @@ function jsonObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
-type EngineLogLevel = 'silent' | 'summary' | 'verbose';
+export type EngineLogLevel = 'quiet' | 'normal' | 'verbose' | 'debug' | 'silent' | 'summary';
 
 interface EngineLogger {
   level: EngineLogLevel;
@@ -60,11 +61,12 @@ export interface ResearchEvaluationLog {
 }
 
 function createLogger(level: EngineLogLevel | undefined): EngineLogger {
-  const selected = level || (process.env.HC_ENGINE_LOG_LEVEL as EngineLogLevel | undefined) || 'summary';
+  const requested = level || (process.env.HC_ENGINE_LOG_LEVEL as EngineLogLevel | undefined) || 'normal';
+  const selected: EngineLogLevel = requested === 'silent' ? 'quiet' : requested === 'summary' ? 'normal' : requested;
   return {
     level: selected,
     log(line: string) {
-      if (selected !== 'silent') console.log(line);
+      if (selected !== 'quiet') console.log(line);
     },
   };
 }
@@ -104,10 +106,10 @@ function summarizeEvaluation(args: {
 }
 
 function logEvaluation(summary: ResearchEvaluationLog, report: ResearchReport, logger: EngineLogger) {
-  if (logger.level === 'silent') return;
+  if (logger.level === 'quiet') return;
   logger.log(`[research-report] cluster=${summary.clusterId} signals=${summary.signalCount} thesis=${summary.thesisStatus} final=${summary.finalStatus} completeness=${summary.completeness} confidence=${summary.confidence}`);
   logger.log(`[research-report] materiality=${summary.materialityLevel} metric="${summary.materialityMetric}" rejected=${summary.rejectedClaims} unverified=${summary.unverifiedClaims} checks=${JSON.stringify(summary.checks)}`);
-  if (logger.level === 'verbose') {
+  if (logger.level === 'verbose' || logger.level === 'debug') {
     for (const claim of report.rejectedClaims) logger.log(`[research-report] rejected: ${claim.text}${claim.reason ? ` — ${claim.reason}` : ''}`);
     for (const claim of report.unverifiedClaims) logger.log(`[research-report] unverified: ${claim.text}${claim.reason ? ` — ${claim.reason}` : ''}`);
     for (const check of report.researchChecks.filter((c) => c.status === 'pending' || c.status === 'partial')) {
@@ -180,6 +182,15 @@ export function defaultResearchQuestions(signal: NormalizedSignal): string[] {
   ];
 }
 
+function normalizedEntityKey(entities: unknown) {
+  if (!Array.isArray(entities)) return null;
+  const company = entities.find((entity: any) => entity?.type === 'company') || entities[0];
+  if (!company) return null;
+  return String(company?.identifiers?.cik || company?.identifiers?.ticker || company?.name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
 export async function storeNormalizedSignal(sourceId: string, signal: NormalizedSignal, documentId?: string) {
   const priority = calculateResearchPriority(buildResearchPriorityInput(signal));
 
@@ -232,6 +243,36 @@ export async function storeNormalizedSignal(sourceId: string, signal: Normalized
 export async function createCatalystClusterFromSignal(signalId: string) {
   const signal = await prisma.signal.findUnique({ where: { id: signalId } });
   if (!signal) throw new Error(`Signal ${signalId} not found`);
+
+  const entityKey = normalizedEntityKey(signal.entities);
+  const candidates = await prisma.catalystCluster.findMany({
+    where: {
+      clusterType: signal.eventType || signal.sourceType,
+      firstSeenAt: { gte: new Date(signal.publishedAt.getTime() - 30 * 86400000) },
+    },
+    include: { signals: { include: { signal: true } } },
+    orderBy: { firstSeenAt: 'desc' },
+    take: 25,
+  });
+  const existing = entityKey
+    ? candidates.find((cluster) => cluster.signals.some(({ signal: linked }) => normalizedEntityKey(linked.entities) === entityKey))
+    : null;
+
+  if (existing) {
+    await prisma.catalystClusterSignal.upsert({
+      where: { clusterId_signalId: { clusterId: existing.id, signalId } },
+      update: { role: 'corroborating', confidence: 0.85 },
+      create: { clusterId: existing.id, signalId, role: 'corroborating', confidence: 0.85 },
+    });
+    await prisma.catalystCluster.update({
+      where: { id: existing.id },
+      data: {
+        priorityScore: Math.max(existing.priorityScore || 0, signal.triageScore || 0),
+        status: existing.status === 'rejected' ? 'triaged' : existing.status,
+      },
+    });
+    return existing;
+  }
 
   const cluster = await prisma.catalystCluster.create({
     data: {
@@ -304,30 +345,93 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   if (!cluster) throw new Error(`Cluster ${clusterId} not found`);
 
   const primary = cluster.signals[0]?.signal;
-  const amounts = primary?.amounts as Array<{ value?: number }> | undefined;
-  const largestAmount = extractLargestAmount(amounts);
+  const signalEntities = cluster.signals.flatMap(({ signal }) => Array.isArray(signal.entities) ? signal.entities as any[] : []);
+  const cik = signalEntities.map((entity) => entity?.identifiers?.cik).find(Boolean);
+  const ticker = signalEntities.map((entity) => entity?.identifiers?.ticker).find(Boolean);
+  const companyName = signalEntities.find((entity) => entity?.type === 'company')?.name;
+  const security = await prisma.security.findFirst({
+    where: ticker
+      ? { ticker: String(ticker), active: true }
+      : cik
+        ? { company: { cik: String(cik).padStart(10, '0') }, active: true }
+        : companyName
+          ? { company: { displayName: { equals: String(companyName), mode: 'insensitive' } }, active: true }
+          : { id: '__unresolved__' },
+    include: { company: true },
+  });
+  const securityAttributes = jsonObject(security?.attributes);
+  const companyContext: DeepResearchCompanyContext = {
+    companyId: security?.companyId,
+    securityId: security?.id,
+    companyName: security?.company.displayName || companyName,
+    ticker: security?.ticker || ticker,
+    cik: security?.company.cik || cik,
+    sector: security?.company.sector,
+    marketCap: security?.marketCap,
+    revenue: Number(securityAttributes.revenue || 0) || null,
+    cash: Number(securityAttributes.cash || 0) || null,
+    assets: Number(securityAttributes.assets || 0) || null,
+    enterpriseValue: Number(securityAttributes.enterpriseValue || 0) || security?.marketCap || null,
+    currentShares: Number(securityAttributes.currentShares || 0) || null,
+  };
+  const registry = createDefaultResearchRegistry();
+  const deepResults = await registry.run({
+    clusterId,
+    title: cluster.title,
+    clusterType: cluster.clusterType,
+    thesis: cluster.thesis,
+    company: companyContext,
+    signals: cluster.signals.map(({ signal }) => ({
+      id: signal.id,
+      title: signal.title,
+      sourceType: signal.sourceType,
+      sourceUrl: signal.sourceUrl,
+      publishedAt: signal.publishedAt,
+      rawText: signal.rawText,
+      entities: signal.entities,
+      amounts: signal.amounts,
+      rawMetadata: signal.rawMetadata,
+      sourceQuality: signal.sourceQuality,
+    })),
+    log(message, detail) {
+      if (logger.level === 'verbose' || logger.level === 'debug') logger.log(`[research] cluster=${clusterId} ${message} ${JSON.stringify(detail || {})}`);
+    },
+  });
+  const deepResearch = mergeDeepResearch(deepResults);
+  if (!deepResults.length) logger.log(`[research] cluster=${clusterId} skipped reason=no_registered_researcher`);
+
+  const largestAmount = Math.max(0,
+    ...cluster.signals.flatMap(({ signal }) => (Array.isArray(signal.amounts) ? signal.amounts as Array<{ value?: number }> : [])).map((amount) => Number(amount.value || 0)),
+    ...deepResearch.amounts.map((amount) => amount.value),
+  ) || null;
   const materiality = computeMateriality({
     eventType: cluster.clusterType,
     amount: largestAmount,
+    revenue: companyContext.revenue,
+    cash: companyContext.cash,
+    assets: companyContext.assets,
+    enterpriseValue: companyContext.enterpriseValue,
+    currentShares: companyContext.currentShares,
   });
   const adversarial = runDeterministicAdversarialCheck({
     eventType: cluster.clusterType,
     title: cluster.title,
-    thesis: cluster.thesis,
+    thesis: deepResearch.thesis || cluster.thesis,
     materialityRatio: materiality.ratio,
     evidenceQuality: primary?.sourceQuality || 50,
-    relationshipConfidence: 70,
+    relationshipConfidence: deepResearch.relationshipConfidence,
     priceReactionScore: 50,
   });
   const researchReport = buildResearchReport({
     title: cluster.title,
     eventType: cluster.clusterType,
-    thesis: cluster.thesis,
+    thesis: deepResearch.thesis || cluster.thesis,
     materiality,
     adversarial,
     priceReactionAvailable: !!cluster.priceReactionJson,
     attentionAvailable: !!cluster.attentionJson,
-    relationshipConfidence: 70,
+    relationshipConfidence: deepResearch.relationshipConfidence,
+    deepResearch,
     signals: cluster.signals.map(({ signal }) => ({
       title: signal.title,
       sourceType: signal.sourceType,
@@ -345,7 +449,7 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   const qualification = qualifyOpportunity({
     primaryEvidenceExists: !!primary,
     hiddenAngleExists: !!cluster.thesis || !!primary?.title,
-    relationshipConfidence: 70,
+    relationshipConfidence: deepResearch.relationshipConfidence,
     materialityScore: materiality.level === 'UNKNOWN' ? 40 : materiality.level === 'LOW' ? 35 : materiality.level === 'MODERATE' ? 60 : 85,
     liquidityAcceptable: true,
     dataFreshnessScore: primary ? 80 : 30,
@@ -383,6 +487,7 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
       structuredAttributes: {
         ...jsonObject(cluster.structuredAttributes),
         researchReport,
+        deepResearch,
       } as any,
       researchCompleteness: completeness,
       researchConfidence: researchReport.confidence,
@@ -390,7 +495,34 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     },
   });
 
-  return { clusterId, materiality, adversarial, qualification, researchReport, completeness, log: evaluationLog };
+  if (security) {
+    const opportunityStatus = researchReport.thesisStatus === 'reject'
+      ? 'rejected'
+      : researchReport.thesisStatus === 'verified'
+        ? 'published'
+        : 'candidate';
+    const existing = await prisma.opportunity.findFirst({ where: { clusterId, securityId: security.id } });
+    const data = {
+      securityId: security.id,
+      clusterId,
+      title: cluster.title,
+      summary: researchReport.summary,
+      status: opportunityStatus,
+      verificationStatus: researchReport.thesisStatus,
+      confidence: researchReport.confidence,
+      researchCompleteness: researchReport.completeness,
+      engineVersion: 'source-agnostic-v2',
+      lastResearchedAt: new Date(),
+      publishedAt: opportunityStatus === 'published' ? new Date() : null,
+    };
+    if (existing) await prisma.opportunity.update({ where: { id: existing.id }, data });
+    else await prisma.opportunity.create({ data });
+    logger.log(`[persist] cluster=${clusterId} opportunity=${existing?.id || 'created'} status=${opportunityStatus} verification=${researchReport.thesisStatus}`);
+  } else {
+    logger.log(`[persist] cluster=${clusterId} opportunity=skipped reason=unresolved_public_security`);
+  }
+
+  return { clusterId, materiality, adversarial, qualification, researchReport, deepResearch, completeness, log: evaluationLog };
 }
 
 export async function runSourceAgnosticIntelligencePass(params?: {

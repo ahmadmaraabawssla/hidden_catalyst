@@ -9,6 +9,8 @@
     "db:generate": "turbo db:generate",
     "db:migrate": "turbo db:migrate",
     "db:seed": "turbo db:seed",
+    "engine:run": "pnpm --filter @hidden-catalyst/engine exec tsx src/cli.ts",
+    "engine:test": "pnpm --filter @hidden-catalyst/engine test",
     "clean": "turbo clean"
   },
   "packageManager": "pnpm@9.0.0",
