@@ -343,12 +343,15 @@ export function classifyQualification(input: QualificationGateInput) {
 }
 
 export async function triageUnclusteredSignals(limit = 100, minPriority = 55) {
+  // Freshness-first: signals harvested most recently get clustered before old
+  // lingering unclustered signals. This prevents prior runs' leftover signals
+  // from monopolizing the triage budget ahead of this run's new harvest.
   const signals = await prisma.signal.findMany({
     where: {
       triageScore: { gte: minPriority },
       clusterSignals: { none: {} },
     },
-    orderBy: [{ triageScore: 'desc' }, { publishedAt: 'desc' }],
+    orderBy: [{ retrievedAt: 'desc' }, { triageScore: 'desc' }],
     take: limit,
   });
 
@@ -595,17 +598,45 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   signalLimit?: number;
   minPriority?: number;
   logLevel?: EngineLogLevel;
+  evalFreshnessHours?: number;
 }) {
   const logger = createLogger(params?.logLevel);
   logger.log(`[engine] source-agnostic pass start signalLimit=${params?.signalLimit ?? 100} minPriority=${params?.minPriority ?? 55}`);
   const triage = await triageUnclusteredSignals(params?.signalLimit ?? 100, params?.minPriority ?? 55);
   logger.log(`[engine] triage unclusteredSignals=${triage.signals} clustersCreated=${triage.clusters}`);
+
+  // ── Scheduling: skip clusters already evaluated within the freshness window ──
+  // unless they have attached signals newer than their last evaluation. This
+  // prevents re-running expensive deep research over unchanged clusters on
+  // every pass, and prioritizes never-evaluated + stale clusters.
+  const freshnessHours = params?.evalFreshnessHours ?? 12;
+  const staleBefore = new Date(Date.now() - freshnessHours * 3600_000);
+
   const clusters = await prisma.catalystCluster.findMany({
-    where: { status: { in: ['open', 'triaged'] } },
-    orderBy: [{ priorityScore: 'desc' }, { firstSeenAt: 'desc' }],
+    where: {
+      status: { in: ['open', 'triaged'] },
+      OR: [
+        { lastEvaluatedAt: null },
+        { lastEvaluatedAt: { lt: staleBefore } },
+        { signals: { some: { signal: { retrievedAt: { gt: staleBefore } } } } },
+      ],
+    },
+    orderBy: [
+      { lastEvaluatedAt: { sort: 'asc', nulls: 'first' } },
+      { firstSeenAt: 'desc' },
+    ],
     take: params?.signalLimit ?? 100,
   });
-  logger.log(`[engine] evaluating clusters=${clusters.length}`);
+
+  const skippedFresh = await prisma.catalystCluster.count({
+    where: {
+      status: { in: ['open', 'triaged'] },
+      lastEvaluatedAt: { gte: staleBefore },
+      signals: { none: { signal: { retrievedAt: { gt: staleBefore } } } },
+    },
+  });
+
+  logger.log(`[engine] evaluating clusters=${clusters.length} skippedFresh=${skippedFresh}`);
 
   const evaluated = [];
   const logs: ResearchEvaluationLog[] = [];
@@ -615,6 +646,6 @@ export async function runSourceAgnosticIntelligencePass(params?: {
     logs.push(result.log);
   }
 
-  logger.log(`[engine] pass complete evaluated=${evaluated.length}`);
-  return { triage, evaluated: evaluated.length, logs };
+  logger.log(`[engine] pass complete evaluated=${evaluated.length} skippedFresh=${skippedFresh}`);
+  return { triage, evaluated: evaluated.length, skippedFresh, logs };
 }

@@ -23,8 +23,9 @@ export async function runIntelligenceEngine() {
   const signalLimit = numberEnv('SIGNAL_LIMIT', 100);
   const minPriority = numberEnv('MIN_RESEARCH_PRIORITY', 55);
   const monitorLimit = numberEnv('MONITOR_LIMIT', 100);
+  const evalFreshnessHours = numberEnv('EVAL_FRESHNESS_HOURS', 12);
 
-  log(logLevel, `[engine] run started level=${logLevel} signalLimit=${signalLimit} minPriority=${minPriority} monitorLimit=${monitorLimit}`);
+  log(logLevel, `[engine] run started level=${logLevel} signalLimit=${signalLimit} minPriority=${minPriority} monitorLimit=${monitorLimit} evalFreshnessHours=${evalFreshnessHours}`);
   log(logLevel, formatCapabilityLog(process.env));
 
   log(logLevel, '[stage] harvest start');
@@ -38,8 +39,8 @@ export async function runIntelligenceEngine() {
   log(logLevel, `[stage] harvest complete fetched=${connectorSummary.fetched} added=${connectorSummary.added} duplicates=${connectorSummary.duplicates} failed=${connectorSummary.failed}`);
 
   log(logLevel, '[stage] intelligence start');
-  const intelligence = await runSourceAgnosticIntelligencePass({ signalLimit, minPriority, logLevel });
-  log(logLevel, `[stage] intelligence complete clustered=${intelligence.triage.clusters} evaluated=${intelligence.evaluated}`);
+  const intelligence = await runSourceAgnosticIntelligencePass({ signalLimit, minPriority, logLevel, evalFreshnessHours });
+  log(logLevel, `[stage] intelligence complete clustered=${intelligence.triage.clusters} evaluated=${intelligence.evaluated} skippedFresh=${intelligence.skippedFresh ?? 0}`);
 
   log(logLevel, '[stage] monitoring start');
   const active = await prisma.opportunity.findMany({
