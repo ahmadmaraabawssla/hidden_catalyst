@@ -15,6 +15,7 @@ export {
   storeNormalizedSignal,
   triageUnclusteredSignals,
 } from './signal-intelligence';
+export type { ResearchEvaluationLog } from './signal-intelligence';
 export { computeMateriality, extractLargestAmount } from './materiality';
 export type { MaterialityInput, MaterialityResult } from './materiality';
 export { calculatePriceReactionWindows } from './price-reaction';

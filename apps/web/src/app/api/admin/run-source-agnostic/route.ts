@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
     const intelligence = await runSourceAgnosticIntelligencePass({
       signalLimit: Number(body.signalLimit || 100),
       minPriority: Number(body.minPriority || 55),
+      logLevel: body.logLevel || 'summary',
     });
 
     steps.push('Re-evaluating monitored opportunities.');

@@ -23,6 +23,7 @@ async function main() {
   const intelligence = await runSourceAgnosticIntelligencePass({
     signalLimit: Number(process.env.SIGNAL_LIMIT || 100),
     minPriority: Number(process.env.MIN_RESEARCH_PRIORITY || 55),
+    logLevel: process.env.HC_ENGINE_LOG_LEVEL || 'verbose',
   });
 
   console.log('\n[3/3] Monitoring active opportunities...');

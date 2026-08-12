@@ -9,6 +9,7 @@ import {
 import { computeMateriality, extractLargestAmount } from './materiality';
 import { runDeterministicAdversarialCheck } from './adversarial';
 import { buildResearchReport } from './research-report';
+import type { ResearchReport } from './research-report';
 
 const MATERIAL_EVENT_TYPES = new Set([
   'contract_award',
@@ -33,6 +34,86 @@ function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+type EngineLogLevel = 'silent' | 'summary' | 'verbose';
+
+interface EngineLogger {
+  level: EngineLogLevel;
+  log: (line: string) => void;
+}
+
+export interface ResearchEvaluationLog {
+  clusterId: string;
+  title: string;
+  signalCount: number;
+  thesisStatus: string;
+  finalStatus: string;
+  completeness: number;
+  confidence: number;
+  materialityLevel: string;
+  materialityMetric: string;
+  rejectedClaims: number;
+  unverifiedClaims: number;
+  checks: Record<string, number>;
+  pendingChecks: string[];
+}
+
+function createLogger(level: EngineLogLevel | undefined): EngineLogger {
+  const selected = level || (process.env.HC_ENGINE_LOG_LEVEL as EngineLogLevel | undefined) || 'summary';
+  return {
+    level: selected,
+    log(line: string) {
+      if (selected !== 'silent') console.log(line);
+    },
+  };
+}
+
+function checkCounts(report: ResearchReport): Record<string, number> {
+  return report.researchChecks.reduce((acc, check) => {
+    acc[check.status] = (acc[check.status] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+}
+
+function summarizeEvaluation(args: {
+  clusterId: string;
+  title: string;
+  signalCount: number;
+  finalStatus: string;
+  materiality: ReturnType<typeof computeMateriality>;
+  researchReport: ResearchReport;
+}): ResearchEvaluationLog {
+  return {
+    clusterId: args.clusterId,
+    title: args.title,
+    signalCount: args.signalCount,
+    thesisStatus: args.researchReport.thesisStatus,
+    finalStatus: args.finalStatus,
+    completeness: args.researchReport.completeness,
+    confidence: args.researchReport.confidence,
+    materialityLevel: args.materiality.level,
+    materialityMetric: args.materiality.metric,
+    rejectedClaims: args.researchReport.rejectedClaims.length,
+    unverifiedClaims: args.researchReport.unverifiedClaims.length,
+    checks: checkCounts(args.researchReport),
+    pendingChecks: args.researchReport.researchChecks
+      .filter((check) => check.status === 'pending' || check.status === 'partial')
+      .map((check) => `${check.check}: ${check.result}`),
+  };
+}
+
+function logEvaluation(summary: ResearchEvaluationLog, report: ResearchReport, logger: EngineLogger) {
+  if (logger.level === 'silent') return;
+  logger.log(`[research-report] cluster=${summary.clusterId} signals=${summary.signalCount} thesis=${summary.thesisStatus} final=${summary.finalStatus} completeness=${summary.completeness} confidence=${summary.confidence}`);
+  logger.log(`[research-report] materiality=${summary.materialityLevel} metric="${summary.materialityMetric}" rejected=${summary.rejectedClaims} unverified=${summary.unverifiedClaims} checks=${JSON.stringify(summary.checks)}`);
+  if (logger.level === 'verbose') {
+    for (const claim of report.rejectedClaims) logger.log(`[research-report] rejected: ${claim.text}${claim.reason ? ` — ${claim.reason}` : ''}`);
+    for (const claim of report.unverifiedClaims) logger.log(`[research-report] unverified: ${claim.text}${claim.reason ? ` — ${claim.reason}` : ''}`);
+    for (const check of report.researchChecks.filter((c) => c.status === 'pending' || c.status === 'partial')) {
+      logger.log(`[research-report] ${check.status}: ${check.check} — ${check.result}`);
+    }
+  }
 }
 
 export function buildResearchPriorityInput(signal: NormalizedSignal, marketCap?: number | null): ResearchPriorityInput {
@@ -212,7 +293,10 @@ export async function triageUnclusteredSignals(limit = 100, minPriority = 55) {
   return { signals: signals.length, clusters: clusters.length };
 }
 
-export async function evaluateClusterForOpportunity(clusterId: string) {
+export async function evaluateClusterForOpportunity(clusterId: string, options?: {
+  logLevel?: EngineLogLevel;
+}) {
+  const logger = createLogger(options?.logLevel);
   const cluster = await prisma.catalystCluster.findUnique({
     where: { id: clusterId },
     include: { signals: { include: { signal: true } } },
@@ -280,6 +364,15 @@ export async function evaluateClusterForOpportunity(clusterId: string) {
           : qualification.status === 'watch'
             ? 'triaged'
             : 'qualified';
+  const evaluationLog = summarizeEvaluation({
+    clusterId,
+    title: cluster.title,
+    signalCount: cluster.signals.length,
+    finalStatus,
+    materiality,
+    researchReport,
+  });
+  logEvaluation(evaluationLog, researchReport, logger);
 
   await prisma.catalystCluster.update({
     where: { id: clusterId },
@@ -297,24 +390,33 @@ export async function evaluateClusterForOpportunity(clusterId: string) {
     },
   });
 
-  return { clusterId, materiality, adversarial, qualification, researchReport, completeness };
+  return { clusterId, materiality, adversarial, qualification, researchReport, completeness, log: evaluationLog };
 }
 
 export async function runSourceAgnosticIntelligencePass(params?: {
   signalLimit?: number;
   minPriority?: number;
+  logLevel?: EngineLogLevel;
 }) {
+  const logger = createLogger(params?.logLevel);
+  logger.log(`[engine] source-agnostic pass start signalLimit=${params?.signalLimit ?? 100} minPriority=${params?.minPriority ?? 55}`);
   const triage = await triageUnclusteredSignals(params?.signalLimit ?? 100, params?.minPriority ?? 55);
+  logger.log(`[engine] triage unclusteredSignals=${triage.signals} clustersCreated=${triage.clusters}`);
   const clusters = await prisma.catalystCluster.findMany({
     where: { status: { in: ['open', 'triaged'] } },
     orderBy: [{ priorityScore: 'desc' }, { firstSeenAt: 'desc' }],
     take: params?.signalLimit ?? 100,
   });
+  logger.log(`[engine] evaluating clusters=${clusters.length}`);
 
   const evaluated = [];
+  const logs: ResearchEvaluationLog[] = [];
   for (const cluster of clusters) {
-    evaluated.push(await evaluateClusterForOpportunity(cluster.id));
+    const result = await evaluateClusterForOpportunity(cluster.id, { logLevel: params?.logLevel });
+    evaluated.push(result);
+    logs.push(result.log);
   }
 
-  return { triage, evaluated: evaluated.length };
+  logger.log(`[engine] pass complete evaluated=${evaluated.length}`);
+  return { triage, evaluated: evaluated.length, logs };
 }
