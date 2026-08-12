@@ -15,6 +15,7 @@ export {
   storeNormalizedSignal,
   triageUnclusteredSignals,
 } from './signal-intelligence';
+export type { ResearchEvaluationLog } from './signal-intelligence';
 export { computeMateriality, extractLargestAmount } from './materiality';
 export type { MaterialityInput, MaterialityResult } from './materiality';
 export { calculatePriceReactionWindows } from './price-reaction';
@@ -23,3 +24,15 @@ export { runDeterministicAdversarialCheck } from './adversarial';
 export type { AdversarialInput, AdversarialResult } from './adversarial';
 export { evaluateThesisMonitoring } from './monitoring';
 export type { ThesisMonitoringEvent } from './monitoring';
+export { buildResearchReport } from './research-report';
+export type {
+  CheckStatus,
+  ClaimStatus,
+  ResearchCheck,
+  ResearchClaim,
+  ResearchReport,
+  ResearchReportInput,
+  ResearchSource,
+  ScenarioTable,
+  ThesisStatus,
+} from './research-report';
