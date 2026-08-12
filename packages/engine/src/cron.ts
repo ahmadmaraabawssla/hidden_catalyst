@@ -5,31 +5,20 @@
  * For MVP, this can be triggered via a simple HTTP endpoint or CLI.
  */
 
-import { runAllConnectors } from '@hidden-catalyst/connectors';
-import { scoreAllPending } from './scoring';
 import { sendAllDigests } from './alerts';
+import { runIntelligenceEngine } from './cli';
 
 export async function runIngestionPipeline() {
   console.log('=== Starting ingestion pipeline ===');
   
-  // 1. Run all connectors
-  console.log('\n[1/4] Running connectors...');
-  const connectorResults = await runAllConnectors();
-  const totalNew = Object.values(connectorResults).reduce((sum, r) => sum + r.documentsNew, 0);
-  console.log(`  Total new documents: ${totalNew}`);
+  const engine = await runIntelligenceEngine();
 
-  // 2. Score pending candidates
-  console.log('\n[2/4] Scoring pending candidates...');
-  const scoreResults = await scoreAllPending();
-  console.log(`  Scored ${scoreResults.scored} opportunities`);
-
-  // 3. Send digests
-  console.log('\n[3/4] Sending daily digests...');
+  console.log('\nSending daily digests...');
   await sendAllDigests();
 
   console.log('\n=== Pipeline complete ===');
   
-  return { connectorResults, scoreResults };
+  return { engine };
 }
 
 // API route handler for cron jobs

@@ -36,3 +36,22 @@ export type {
   ScenarioTable,
   ThesisStatus,
 } from './research-report';
+export {
+  ContractDeepResearcher,
+  createDefaultResearchRegistry,
+  DeepResearchRegistry,
+  mergeDeepResearch,
+  PatentDeepResearcher,
+  RegulatoryDeepResearcher,
+  SecDeepResearcher,
+} from './deep-research';
+export { runIntelligenceEngine } from './cli';
+export type { EngineLogLevel } from './signal-intelligence';
+export type {
+  DeepResearchCompanyContext,
+  DeepResearchContext,
+  DeepResearchFact,
+  DeepResearchResult,
+  DeepResearcher,
+  DeepResearchSignal,
+} from './deep-research';

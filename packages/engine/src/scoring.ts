@@ -218,6 +218,7 @@ export async function scoreOpportunity(opportunityId: string) {
     where: { id: opportunityId },
     include: {
       security: { include: { company: true } },
+      cluster: true,
       claims: true,
       risks: true,
     },
@@ -280,7 +281,12 @@ export async function scoreOpportunity(opportunityId: string) {
     inputs.liquidityPenalty < 20
   );
 
-  if (gate.canPublish) {
+  const structured = opp.cluster?.structuredAttributes && typeof opp.cluster.structuredAttributes === 'object'
+    ? opp.cluster.structuredAttributes as Record<string, any>
+    : {};
+  const canonicalStatus = structured.researchReport?.thesisStatus;
+
+  if (gate.canPublish && canonicalStatus === 'verified') {
     await prisma.opportunity.update({
       where: { id: opportunityId },
       data: { status: 'published', publishedAt: new Date() },
@@ -294,7 +300,10 @@ export async function scoreOpportunity(opportunityId: string) {
     console.log(`→ ${opp.security.ticker}: needs review — ${gate.reason}`);
   }
 
-  return { ...result, gateReason: gate.reason };
+  return {
+    ...result,
+    gateReason: canonicalStatus === 'verified' ? gate.reason : 'canonical_report_not_verified',
+  };
 }
 
 export async function scoreAllPending() {

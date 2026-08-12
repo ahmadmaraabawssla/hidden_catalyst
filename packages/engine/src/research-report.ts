@@ -82,6 +82,15 @@ export interface ResearchReportInput {
   priceReactionAvailable?: boolean;
   attentionAvailable?: boolean;
   relationshipConfidence?: number | null;
+  deepResearch?: {
+    summary?: string;
+    verifiedFacts?: Array<{ text: string; sourceUrl?: string; confidence?: number }>;
+    inferredClaims?: string[];
+    contradictions?: string[];
+    missingInputs?: string[];
+    openQuestions?: string[];
+    researchers?: string[];
+  };
 }
 
 function clamp(value: number, min = 0, max = 100) {
@@ -159,6 +168,16 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
   const hasMaterialityDenominator = input.materiality.denominator != null && input.materiality.ratio != null;
 
   return [
+    {
+      id: 'deep_research',
+      status: input.deepResearch?.researchers?.length ? 'verified' : 'pending',
+      source: input.deepResearch?.researchers?.join(', ') || 'Researcher registry',
+      check: 'Source-specific deep research completed',
+      result: input.deepResearch?.researchers?.length
+        ? `${input.deepResearch.researchers.length} source-specific researcher${input.deepResearch.researchers.length === 1 ? '' : 's'} completed`
+        : 'No source-specific deep researcher completed',
+      why: 'Normalized metadata alone is not sufficient for a publication decision.',
+    },
     {
       id: 'primary_source',
       status: hasSignal ? 'verified' : 'pending',
@@ -294,17 +313,27 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     });
   }
 
-  const verifiedFacts: ResearchClaim[] = input.signals.slice(0, 5).map((signal) => ({
+  const signalFacts: ResearchClaim[] = input.signals.slice(0, 5).map((signal) => ({
     status: 'verified',
     text: signal.title,
     evidence: signal.sourceType,
   }));
+  const deepFacts: ResearchClaim[] = (input.deepResearch?.verifiedFacts || []).map((fact) => ({
+    status: 'verified',
+    text: fact.text,
+    evidence: fact.sourceUrl || input.deepResearch?.researchers?.join(', '),
+  }));
+  const verifiedFacts = [...deepFacts, ...signalFacts]
+    .filter((fact, index, facts) => facts.findIndex((candidate) => candidate.text === fact.text) === index)
+    .slice(0, 12);
 
-  const inferredClaims: ResearchClaim[] = input.thesis ? [{
-    status: 'inferred',
-    text: input.thesis,
-    reason: 'Thesis synthesized from normalized public signal evidence.',
-  }] : [];
+  const inferredClaims: ResearchClaim[] = [input.thesis, ...(input.deepResearch?.inferredClaims || [])]
+    .filter((claim, index, claims): claim is string => !!claim && claims.indexOf(claim) === index)
+    .map((claim) => ({ status: 'inferred', text: claim, reason: 'Thesis synthesized from normalized and source-specific public evidence.' }));
+
+  for (const contradiction of input.deepResearch?.contradictions || []) {
+    unverifiedClaims.push({ status: 'unverified', text: contradiction, reason: 'Source-specific researcher identified this limiting claim.' });
+  }
 
   const checks = buildChecks(input, combined);
   const completeness = completenessFromChecks(checks);
@@ -331,9 +360,9 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     version: 'research_report_v1',
     thesis: input.thesis || input.title,
     thesisStatus: qualification.status,
-    summary: qualification.status === 'verified'
+    summary: input.deepResearch?.summary || (qualification.status === 'verified'
       ? 'High-confidence public-signal thesis with core checks resolved.'
-      : 'Promising public-signal thesis; unresolved checks limit conviction.',
+      : 'Promising public-signal thesis; unresolved checks limit conviction.'),
     verifiedFacts,
     inferredClaims,
     unverifiedClaims,
@@ -348,10 +377,14 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     materiality: input.materiality,
     adversarial: input.adversarial,
     scenarioTables: scenario ? [scenario] : [],
-    missingInputs: checks.filter((check) => check.status === 'pending').map((check) => check.result),
+    missingInputs: [...new Set([
+      ...checks.filter((check) => check.status === 'pending').map((check) => check.result),
+      ...(input.deepResearch?.missingInputs || []),
+    ])],
     openQuestions: [
       ...unverifiedClaims.map((claim) => claim.reason || claim.text),
       ...input.adversarial.findings.map((finding) => finding.finding),
+      ...(input.deepResearch?.openQuestions || []),
     ].filter(Boolean),
     confidence,
     completeness,

@@ -52,7 +52,7 @@ export class FDAConnector extends BaseConnector {
           title: `FDA: ${brand} (${generic})`,
           text: `FDA drug application for ${brand} (${generic}) by ${manufacturer}. Application #${appNum}.`,
           publishedAt: new Date(),
-          metadata: { manufacturer, brand, generic, appNum, source: 'fda' },
+          metadata: { manufacturer, brand, generic, appNum, source: 'fda', status: item?.submissions?.[0]?.submission_status, actionDate: item?.submissions?.[0]?.submission_status_date },
         });
       }
     } catch {
@@ -142,7 +142,7 @@ export class ClinicalTrialsConnector extends BaseConnector {
             title: `Trial: ${title}`.slice(0, 200),
             text: `${title}. Status: ${status}. Phase: ${p?.designModule?.phases?.[0] || 'N/A'}. Sponsor: ${company.displayName}.`,
             publishedAt: new Date(),
-            metadata: { nctId: id?.nctId, status, company: company.displayName },
+            metadata: { nctId: id?.nctId, status, company: company.displayName, phase: p?.designModule?.phases?.[0], endpoints: p?.outcomesModule?.primaryOutcomes },
           });
         }
       } catch {}
