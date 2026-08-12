@@ -43,23 +43,26 @@ function jsonObject(value: unknown): Record<string, unknown> {
  * Returns null if the resulting stem is too short to be a safe match key.
  */
 function normalizeCompanyName(name: unknown): string | null {
-  const raw = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-  const stem = raw
-    .replace(/incorporated$/, '')
-    .replace(/corporation$/, '')
-    .replace(/company$/, '')
-    .replace(/limited$/, '')
-    .replace(/holdings$/, '')
-    .replace(/holding$/, '')
-    .replace(/group$/, '')
-    .replace(/the$/, '')
-    .replace(/inc$/, '')
-    .replace(/corp$/, '')
-    .replace(/llc$/, '')
-    .replace(/ltd$/, '')
-    .replace(/plc$/, '')
-    .replace(/co$/, '');
-  return stem.length >= 4 ? stem : null;
+  let stem = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  // Strip leading definite article ("THE BOEING COMPANY" → "boeingcompany").
+  stem = stem.replace(/^the/, '');
+  // Strip trailing legal suffixes repeatedly (handles stacked "Inc. Co." etc).
+  const suffixes = [
+    'incorporated', 'corporation', 'company', 'limited', 'holdings', 'holding',
+    'group', 'inc', 'corp', 'llc', 'ltd', 'plc', 'co', 'sa', 'ag', 'nv', 'gmbh', 'spa',
+    'adr', 'fi', // EDGAR foreign-issuer markers ("PLC /FI/", "(ADR)")
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const suffix of suffixes) {
+      if (stem.endsWith(suffix)) {
+        stem = stem.slice(0, -suffix.length);
+        changed = true;
+      }
+    }
+  }
+  return stem.length >= 3 ? stem : null;
 }
 
 export type EngineLogLevel = 'quiet' | 'normal' | 'verbose' | 'debug' | 'silent' | 'summary';
@@ -408,23 +411,39 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     });
   }
   if (!security && companyName) {
-    // Normalized-stem match against displayName / legalName
+    // Normalized-stem match against displayName / legalName.
     const stem = normalizeCompanyName(companyName);
     if (stem) {
       const candidates = await prisma.security.findMany({
         where: { active: true },
         select: { id: true, ticker: true, company: { select: { displayName: true, legalName: true } } },
       });
-      const matched = candidates.find((candidate) =>
+      let matched: (typeof candidates)[number] | undefined;
+      let matchKind: 'exact' | 'subsidiary' = 'exact';
+      // Tier 1: exact normalized-stem match.
+      matched = candidates.find((candidate) =>
         normalizeCompanyName(candidate.company.displayName) === stem ||
         normalizeCompanyName(candidate.company.legalName) === stem
       );
+      // Tier 2: subsidiary/prefix match — one stem is a prefix of the other,
+      // e.g. "BAE Systems Space & Mission Systems Inc" → "BAE Systems PLC".
+      // Requires a >=6-char shared prefix to avoid false positives.
+      if (!matched && stem.length >= 6) {
+        matched = candidates.find((candidate) => {
+          const cs = normalizeCompanyName(candidate.company.displayName) ||
+            normalizeCompanyName(candidate.company.legalName);
+          if (!cs) return false;
+          const shorter = cs.length < stem.length ? cs : stem;
+          return shorter.length >= 6 && (stem.startsWith(cs) || cs.startsWith(stem));
+        });
+        if (matched) matchKind = 'subsidiary';
+      }
       if (matched) {
         security = await prisma.security.findFirst({
           where: { id: matched.id, active: true },
           include: { company: true },
         });
-        logger.log(`[research] cluster=${clusterId} entity_resolved=${String(companyName)} → ${matched.ticker} via normalized name`);
+        logger.log(`[research] cluster=${clusterId} entity_resolved=${String(companyName)} → ${matched.ticker} via ${matchKind === 'exact' ? 'normalized name' : 'subsidiary name'}`);
       }
     }
   }
