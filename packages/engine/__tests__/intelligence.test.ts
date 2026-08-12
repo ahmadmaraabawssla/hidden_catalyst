@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildResearchReport,
   calculatePriceReactionWindows,
   computeMateriality,
   runDeterministicAdversarialCheck,
@@ -62,5 +63,46 @@ describe('runDeterministicAdversarialCheck', () => {
 
     expect(result.findings.length).toBeGreaterThan(0);
     expect(result.confidencePenalty).toBeGreaterThan(0);
+  });
+});
+
+describe('buildResearchReport', () => {
+  it('rejects spot-price substitution for defined contractual variables', () => {
+    const materiality = computeMateriality({
+      eventType: 'true_up_liability',
+      amount: 1_000_000,
+    });
+    const adversarial = runDeterministicAdversarialCheck({
+      eventType: 'true_up_liability',
+      title: 'If the stock trades below $0.39912, the company could owe up to $1M',
+      thesis: 'Commitment Fee Price is less than the Minimum Price.',
+      materialityRatio: materiality.ratio,
+      evidenceQuality: 88,
+      relationshipConfidence: 80,
+    });
+
+    const report = buildResearchReport({
+      title: 'True-up clause',
+      eventType: 'true_up_liability',
+      thesis: 'If the stock trades below $0.39912, the company could owe up to $1M. The Commitment Fee Price is less than the Minimum Price.',
+      materiality,
+      adversarial,
+      signals: [{
+        title: 'True-Up Amount = $1,000,000 - (2,505,513 * Commitment Fee Price). Minimum Price threshold: $0.39912',
+        sourceType: 'sec_filing',
+        rawText: 'The company may have the option to settle the true-up in shares.',
+        amounts: [{ value: 1_000_000 }],
+        sourceQuality: 88,
+      }],
+      attentionAvailable: false,
+      priceReactionAvailable: false,
+    });
+
+    expect(report.rejectedClaims.some((claim) => claim.text.includes('Spot stock price'))).toBe(true);
+    expect(report.unverifiedClaims.some((claim) => claim.text.includes('settled in shares'))).toBe(true);
+    expect(report.unverifiedClaims.some((claim) => claim.text.includes('Financial materiality'))).toBe(true);
+    expect(report.unverifiedClaims.some((claim) => claim.text.includes('overlooked'))).toBe(true);
+    expect(report.thesisStatus).toBe('watch');
+    expect(report.scenarioTables[0].rows.length).toBeGreaterThan(0);
   });
 });

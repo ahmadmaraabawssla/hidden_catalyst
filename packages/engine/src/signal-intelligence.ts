@@ -8,6 +8,7 @@ import {
 } from '@hidden-catalyst/domain';
 import { computeMateriality, extractLargestAmount } from './materiality';
 import { runDeterministicAdversarialCheck } from './adversarial';
+import { buildResearchReport } from './research-report';
 
 const MATERIAL_EVENT_TYPES = new Set([
   'contract_award',
@@ -26,6 +27,12 @@ function clamp(value: number, min = 1, max = 100) {
 
 function daysSince(date: Date) {
   return Math.max(0, Math.round((Date.now() - date.getTime()) / 86400000));
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 export function buildResearchPriorityInput(signal: NormalizedSignal, marketCap?: number | null): ResearchPriorityInput {
@@ -228,12 +235,28 @@ export async function evaluateClusterForOpportunity(clusterId: string) {
     relationshipConfidence: 70,
     priceReactionScore: 50,
   });
+  const researchReport = buildResearchReport({
+    title: cluster.title,
+    eventType: cluster.clusterType,
+    thesis: cluster.thesis,
+    materiality,
+    adversarial,
+    priceReactionAvailable: !!cluster.priceReactionJson,
+    attentionAvailable: !!cluster.attentionJson,
+    relationshipConfidence: 70,
+    signals: cluster.signals.map(({ signal }) => ({
+      title: signal.title,
+      sourceType: signal.sourceType,
+      sourceUrl: signal.sourceUrl,
+      publishedAt: signal.publishedAt,
+      rawText: signal.rawText,
+      entities: signal.entities,
+      amounts: signal.amounts,
+      sourceQuality: signal.sourceQuality,
+    })),
+  });
   const completeness = Math.max(25, Math.min(100,
-    20 +
-    (primary ? 20 : 0) +
-    (largestAmount ? 15 : 0) +
-    (materiality.ratio != null ? 20 : 0) +
-    (adversarial.findings.length > 0 ? 15 : 0)
+    researchReport.completeness
   ));
   const qualification = qualifyOpportunity({
     primaryEvidenceExists: !!primary,
@@ -246,20 +269,35 @@ export async function evaluateClusterForOpportunity(clusterId: string) {
     evidenceQuality: primary?.sourceQuality || 50,
     researchCompleteness: completeness,
   });
+  const finalStatus = researchReport.thesisStatus === 'reject'
+    ? 'rejected'
+    : researchReport.thesisStatus === 'watch'
+      ? 'triaged'
+      : researchReport.thesisStatus === 'verified'
+        ? 'qualified'
+        : qualification.status === 'reject'
+          ? 'rejected'
+          : qualification.status === 'watch'
+            ? 'triaged'
+            : 'qualified';
 
   await prisma.catalystCluster.update({
     where: { id: clusterId },
     data: {
-      status: qualification.status === 'reject' ? 'rejected' : qualification.status === 'watch' ? 'triaged' : 'qualified',
+      status: finalStatus,
       materialityJson: materiality as any,
       adversarialJson: adversarial as any,
+      structuredAttributes: {
+        ...jsonObject(cluster.structuredAttributes),
+        researchReport,
+      } as any,
       researchCompleteness: completeness,
-      researchConfidence: Math.max(0, completeness - adversarial.confidencePenalty),
+      researchConfidence: researchReport.confidence,
       lastEvaluatedAt: new Date(),
     },
   });
 
-  return { clusterId, materiality, adversarial, qualification, completeness };
+  return { clusterId, materiality, adversarial, qualification, researchReport, completeness };
 }
 
 export async function runSourceAgnosticIntelligencePass(params?: {

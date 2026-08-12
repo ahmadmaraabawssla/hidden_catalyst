@@ -23,3 +23,15 @@ export { runDeterministicAdversarialCheck } from './adversarial';
 export type { AdversarialInput, AdversarialResult } from './adversarial';
 export { evaluateThesisMonitoring } from './monitoring';
 export type { ThesisMonitoringEvent } from './monitoring';
+export { buildResearchReport } from './research-report';
+export type {
+  CheckStatus,
+  ClaimStatus,
+  ResearchCheck,
+  ResearchClaim,
+  ResearchReport,
+  ResearchReportInput,
+  ResearchSource,
+  ScenarioTable,
+  ThesisStatus,
+} from './research-report';
