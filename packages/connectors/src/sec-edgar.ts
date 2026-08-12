@@ -22,65 +22,90 @@ export class SECEdgarConnector extends BaseConnector {
   }
 
   async fetchDocuments(since?: Date): Promise<RawDocument[]> {
+    const sinceDate = since || new Date(Date.now() - 7 * 86400000);
+
+    // Only listed companies with a CIK and at least one active security on a
+    // major exchange. The global FTS search (`q=*`) is unsuitable for a large
+    // universe and rate-limits badly, so we query each company's own submission
+    // history directly — this is the reliable, SEC-blessed endpoint.
     const companies = await this.prisma.company.findMany({
-      where: { cik: { not: null } },
-      select: { cik: true, displayName: true },
+      where: {
+        cik: { not: null },
+        securities: { some: { active: true, exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] } } },
+      },
+      select: {
+        cik: true,
+        displayName: true,
+        securities: { where: { active: true }, select: { ticker: true, exchange: true }, take: 1 },
+      },
     });
 
     if (companies.length === 0) return [];
 
-    const cikSet = new Set(companies.map(c => c.cik));
-    const sinceDate = since || new Date(Date.now() - 7 * 86400000);
+    console.log(`[SEC EDGAR] Checking ${companies.length} listed companies for recent filings...`);
 
-    const url = `https://efts.sec.gov/LATEST/search-index?q=*&dateRange=custom&startdt=${this.formatDate(sinceDate)}&enddt=${this.formatDate(new Date())}&forms=8-K,10-Q,10-K,S-1,13D,13G&pageSize=100&sort=@filingDate:desc`;
+    const materialForms = new Set(['8-K', '10-Q', '10-K', 'S-1', '13D', '13G']);
+    const skipForms = new Set(['3', '4', '5', '3/A', '4/A', '144', 'N-PX', 'NPORT-P', 'N-CSR', 'N-CSRS', '6-K', 'ARS', 'CERT', '25', '8-A12B', 'PX14A6G', 'S-8', '424B2', 'FWP', '25-NSE', 'SD']);
+    const documents: RawDocument[] = [];
 
-    console.log(`[SEC EDGAR] Fetching filings for ${companies.length} tracked companies...`);
-
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Hidden Catalyst Research contact@hiddencatalyst.com',
-          'Accept-Encoding': 'gzip, deflate',
-        },
-        signal: AbortSignal.timeout(15000),
-      });
-
-      if (!response.ok) return [];
-
-      const data = await response.json();
-      const hits = data?.hits?.hits || [];
-      const documents: RawDocument[] = [];
-
-      for (const hit of hits) {
-        const source = hit._source || {};
-        const cik = String(source.cik || '').padStart(10, '0');
-
-        if (!cikSet.has(cik)) continue;
-
-        documents.push({
-          canonicalUrl: `https://www.sec.gov/Archives/edgar/data/${cik}/${(source.accessionNumber || '').replace(/-/g, '')}/${source.accessionNumber || ''}-index.html`,
-          title: `Form ${source.form?.toUpperCase() || '8-K'} — ${source.displayNames?.[0] || 'Unknown'}`,
-          text: source.fileStr || `Filing. Form: ${source.form}`,
-          publishedAt: new Date(source.fileDate || source.filedAt || Date.now()),
-          metadata: {
-            cik,
-            accessionNumber: source.accessionNumber,
-            formType: source.form?.toUpperCase(),
-            displayName: source.displayNames?.[0],
+    for (const company of companies) {
+      const cik = String(company.cik).padStart(10, '0');
+      try {
+        const response = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
+          headers: {
+            'User-Agent': 'Hidden Catalyst Research contact@hiddencatalyst.com',
+            'Accept-Encoding': 'gzip, deflate',
           },
+          signal: AbortSignal.timeout(10000),
         });
-      }
+        if (!response.ok) continue;
 
-      console.log(`[SEC EDGAR] Found ${documents.length} tracked filings`);
-      return documents;
-    } catch (err) {
-      console.error(`[SEC EDGAR] Error: ${(err as Error).message}`);
-      return [];
+        const data = await response.json();
+        const recent = data?.filings?.recent;
+        if (!recent?.form) continue;
+
+        // Most recent material filing within the window (one per company)
+        for (let i = 0; i < Math.min(10, recent.form.length); i++) {
+          const rawForm = (recent.form[i] || '').toUpperCase();
+          const form = rawForm.replace(/\/A$/, '');
+          if (!materialForms.has(form) || skipForms.has(rawForm)) continue;
+
+          const filed = recent.filingDate[i] || '';
+          if (!filed) continue;
+          const filedDate = new Date(filed);
+          if (filedDate < sinceDate) continue;
+
+          const accession = recent.accessionNumber[i] || '';
+          documents.push({
+            canonicalUrl: `https://www.sec.gov/Archives/edgar/data/${cik}/${accession.replace(/-/g, '')}/${accession}.txt`,
+            title: `Form ${form} — ${company.displayName}`,
+            text: '',
+            publishedAt: filedDate,
+            metadata: {
+              cik,
+              accessionNumber: accession,
+              formType: form,
+              displayName: company.displayName,
+              ticker: company.securities[0]?.ticker || null,
+              exchange: company.securities[0]?.exchange || null,
+            },
+          });
+          break;
+        }
+
+        await this.throttle();
+      } catch {
+        // Skip companies that fail to fetch; continue the rest
+      }
     }
+
+    console.log(`[SEC EDGAR] Found ${documents.length} recent filings`);
+    return documents;
   }
 
-  private formatDate(date: Date): string {
-    return date.toISOString().slice(0, 10).replace(/-/g, '');
+  private throttle(): Promise<void> {
+    // SEC requires ≤10 requests/sec; use a conservative 100ms spacing.
+    return new Promise((resolve) => setTimeout(resolve, 100));
   }
 
   async extract(doc: RawDocument): Promise<ExtractionResult> {
