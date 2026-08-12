@@ -7,6 +7,7 @@ import {
   type ResearchPriorityInput,
 } from '@hidden-catalyst/domain';
 import { computeMateriality, extractLargestAmount } from './materiality';
+import { enrichFinancialDenominators } from './market-data';
 import { runDeterministicAdversarialCheck } from './adversarial';
 import { buildResearchReport } from './research-report';
 import type { ResearchReport } from './research-report';
@@ -448,6 +449,28 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     }
   }
   const securityAttributes = jsonObject(security?.attributes);
+  // Financial denominators (revenue/cash/assets/shares) drive materiality.
+  // Enrich on demand from FMP when they are missing, and cache the result
+  // back into security.attributes so later passes don't re-fetch.
+  let revenue = Number(securityAttributes.revenue || 0) || null;
+  let cash = Number(securityAttributes.cash || 0) || null;
+  let assets = Number(securityAttributes.assets || 0) || null;
+  let currentShares = Number(securityAttributes.currentShares || 0) || null;
+  let enterpriseValue = Number(securityAttributes.enterpriseValue || 0) || null;
+
+  if (security && revenue == null && cash == null && assets == null && currentShares == null) {
+    const enriched = await enrichFinancialDenominators(security);
+    if (enriched.revenue != null || enriched.cash != null || enriched.assets != null || enriched.currentShares != null) {
+      revenue = enriched.revenue;
+      cash = enriched.cash;
+      assets = enriched.assets;
+      currentShares = enriched.currentShares;
+      enterpriseValue = enriched.enterpriseValue;
+      logger.log(`[research] cluster=${clusterId} financials_enriched=${security.ticker} revenue=${revenue} cash=${cash} assets=${assets} ev=${enterpriseValue}`);
+    }
+  }
+  if (security && enterpriseValue == null) enterpriseValue = security.marketCap ?? null;
+
   const companyContext: DeepResearchCompanyContext = {
     companyId: security?.companyId,
     securityId: security?.id,
@@ -456,11 +479,11 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     cik: security?.company.cik || cik,
     sector: security?.company.sector,
     marketCap: security?.marketCap,
-    revenue: Number(securityAttributes.revenue || 0) || null,
-    cash: Number(securityAttributes.cash || 0) || null,
-    assets: Number(securityAttributes.assets || 0) || null,
-    enterpriseValue: Number(securityAttributes.enterpriseValue || 0) || security?.marketCap || null,
-    currentShares: Number(securityAttributes.currentShares || 0) || null,
+    revenue,
+    cash,
+    assets,
+    enterpriseValue,
+    currentShares,
   };
   const registry = createDefaultResearchRegistry();
   const deepResults = await registry.run({
