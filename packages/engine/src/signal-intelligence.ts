@@ -37,6 +37,31 @@ function jsonObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * Normalize a company name for matching: lowercase, strip punctuation and
+ * common legal suffixes, so "CorVista Medical, Inc." ≈ "corvistamedical".
+ * Returns null if the resulting stem is too short to be a safe match key.
+ */
+function normalizeCompanyName(name: unknown): string | null {
+  const raw = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const stem = raw
+    .replace(/incorporated$/, '')
+    .replace(/corporation$/, '')
+    .replace(/company$/, '')
+    .replace(/limited$/, '')
+    .replace(/holdings$/, '')
+    .replace(/holding$/, '')
+    .replace(/group$/, '')
+    .replace(/the$/, '')
+    .replace(/inc$/, '')
+    .replace(/corp$/, '')
+    .replace(/llc$/, '')
+    .replace(/ltd$/, '')
+    .replace(/plc$/, '')
+    .replace(/co$/, '');
+  return stem.length >= 4 ? stem : null;
+}
+
 export type EngineLogLevel = 'quiet' | 'normal' | 'verbose' | 'debug' | 'silent' | 'summary';
 
 interface EngineLogger {
@@ -349,16 +374,57 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   const cik = signalEntities.map((entity) => entity?.identifiers?.cik).find(Boolean);
   const ticker = signalEntities.map((entity) => entity?.identifiers?.ticker).find(Boolean);
   const companyName = signalEntities.find((entity) => entity?.type === 'company')?.name;
-  const security = await prisma.security.findFirst({
-    where: ticker
-      ? { ticker: String(ticker), active: true }
-      : cik
-        ? { company: { cik: String(cik).padStart(10, '0') }, active: true }
-        : companyName
-          ? { company: { displayName: { equals: String(companyName), mode: 'insensitive' } }, active: true }
-          : { id: '__unresolved__' },
-    include: { company: true },
-  });
+
+  // ── Entity resolution: ticker → cik → exact name → normalized name ──
+  let security = null;
+  if (ticker) {
+    security = await prisma.security.findFirst({
+      where: { ticker: String(ticker).toUpperCase(), active: true },
+      include: { company: true },
+    });
+  }
+  if (!security && cik) {
+    security = await prisma.security.findFirst({
+      where: { company: { cik: String(cik).padStart(10, '0') }, active: true },
+      include: { company: true },
+    });
+  }
+  if (!security && companyName) {
+    // Exact-ish match on displayName or legalName
+    security = await prisma.security.findFirst({
+      where: {
+        active: true,
+        company: {
+          OR: [
+            { displayName: { equals: String(companyName), mode: 'insensitive' } },
+            { legalName: { equals: String(companyName), mode: 'insensitive' } },
+          ],
+        },
+      },
+      include: { company: true },
+    });
+  }
+  if (!security && companyName) {
+    // Normalized-stem match against displayName / legalName
+    const stem = normalizeCompanyName(companyName);
+    if (stem) {
+      const candidates = await prisma.security.findMany({
+        where: { active: true },
+        select: { id: true, ticker: true, company: { select: { displayName: true, legalName: true } } },
+      });
+      const matched = candidates.find((candidate) =>
+        normalizeCompanyName(candidate.company.displayName) === stem ||
+        normalizeCompanyName(candidate.company.legalName) === stem
+      );
+      if (matched) {
+        security = await prisma.security.findFirst({
+          where: { id: matched.id, active: true },
+          include: { company: true },
+        });
+        logger.log(`[research] cluster=${clusterId} entity_resolved=${String(companyName)} → ${matched.ticker} via normalized name`);
+      }
+    }
+  }
   const securityAttributes = jsonObject(security?.attributes);
   const companyContext: DeepResearchCompanyContext = {
     companyId: security?.companyId,
