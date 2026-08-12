@@ -8,6 +8,8 @@ import {
 } from '@hidden-catalyst/domain';
 import { computeMateriality, extractLargestAmount } from './materiality';
 import { enrichFinancialDenominators } from './market-data';
+import { measureAttention } from './catalyst-attention';
+import { fetchPriceReaction } from './price-reaction';
 import { runDeterministicAdversarialCheck } from './adversarial';
 import { buildResearchReport } from './research-report';
 import type { ResearchReport } from './research-report';
@@ -64,6 +66,27 @@ function normalizeCompanyName(name: unknown): string | null {
     }
   }
   return stem.length >= 3 ? stem : null;
+}
+
+/**
+ * Extract a small set of search keywords from a cluster title for attention
+ * matching (press-release / news keyword lookups). Returns the company name
+ * plus the most distinctive title tokens.
+ */
+function extractKeywords(title: string, companyName?: string): string[] {
+  const stop = new Set(['the', 'and', 'for', 'with', 'from', 'inc', 'corp', 'llc', 'ltd', 'co', 'company', 'corporation', 'new', 'update', 'federal', 'contract']);
+  const tokens = String(title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((word) => word.length >= 4 && !stop.has(word));
+  const keywords = new Set<string>();
+  if (companyName) keywords.add(String(companyName).toLowerCase());
+  for (const token of tokens) {
+    if (keywords.size >= 8) break;
+    keywords.add(token);
+  }
+  return [...keywords];
 }
 
 export type EngineLogLevel = 'quiet' | 'normal' | 'verbose' | 'debug' | 'silent' | 'summary';
@@ -533,14 +556,37 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     relationshipConfidence: deepResearch.relationshipConfidence,
     priceReactionScore: 50,
   });
+
+  // ── Attention + event-window price reaction (best-effort, cached) ──
+  let attentionProfile = jsonObject(cluster.attentionJson) as any;
+  let priceReaction = jsonObject(cluster.priceReactionJson) as any;
+  if (security && !attentionProfile?.attentionScore) {
+    try {
+      const keywords = extractKeywords(cluster.title, companyContext.companyName);
+      attentionProfile = await measureAttention(security.ticker, process.env.FMP_API_KEY, security.marketCap, keywords);
+      logger.log(`[research] cluster=${clusterId} attention=${attentionProfile.attentionScore} pr=${attentionProfile.pressRelease?.found} news=${attentionProfile.news?.count} source=${attentionProfile.source}`);
+    } catch {
+      attentionProfile = null;
+    }
+  }
+  if (security && !priceReaction?.eventDate) {
+    try {
+      const eventDate = primary?.publishedAt ?? cluster.firstSeenAt ?? new Date();
+      priceReaction = await fetchPriceReaction(security.ticker, new Date(eventDate));
+      logger.log(`[research] cluster=${clusterId} price_reaction=${priceReaction?.marketReaction ?? 'unavailable'}`);
+    } catch {
+      priceReaction = null;
+    }
+  }
+
   const researchReport = buildResearchReport({
     title: cluster.title,
     eventType: cluster.clusterType,
     thesis: deepResearch.thesis || cluster.thesis,
     materiality,
     adversarial,
-    priceReactionAvailable: !!cluster.priceReactionJson,
-    attentionAvailable: !!cluster.attentionJson,
+    priceReactionAvailable: !!priceReaction,
+    attentionAvailable: !!attentionProfile,
     relationshipConfidence: deepResearch.relationshipConfidence,
     deepResearch,
     signals: cluster.signals.map(({ signal }) => ({
@@ -595,6 +641,8 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
       status: finalStatus,
       materialityJson: materiality as any,
       adversarialJson: adversarial as any,
+      ...(attentionProfile ? { attentionJson: attentionProfile as any } : {}),
+      ...(priceReaction ? { priceReactionJson: priceReaction as any } : {}),
       structuredAttributes: {
         ...jsonObject(cluster.structuredAttributes),
         researchReport,
