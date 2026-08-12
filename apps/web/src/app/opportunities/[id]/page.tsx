@@ -18,6 +18,112 @@ function formatPrice(val: number): string {
   return '$' + val.toFixed(4); // penny/sub-dollar: full precision
 }
 
+function textOf(value: unknown): string {
+  return String(value || '');
+}
+
+function allResearchText(parts: unknown[]): string {
+  return parts.map(textOf).join(' \n ').toLowerCase();
+}
+
+function usesDefinedContractPrice(text: string): boolean {
+  return /commitment fee price|effective amount|minimum price|floor price/i.test(text);
+}
+
+function softenContractVariableClaims(text: unknown): string {
+  let output = textOf(text);
+  if (!usesDefinedContractPrice(output)) return output;
+
+  output = output.replace(
+    /if the stock trades below \$?([0-9]+(?:\.[0-9]+)?),?\s*the company could owe up to \$?([0-9.,]+[mk]?)/gi,
+    'if the contractual Commitment Fee Price is below $$1, the true-up formula may produce a payment up to $$2'
+  );
+  output = output.replace(
+    /if the stock price falls below the minimum price/gi,
+    'if the contractual Commitment Fee Price falls below the Minimum Price'
+  );
+  output = output.replace(
+    /triggered by a stock price decline/gi,
+    'triggered by a decline in the contractual Commitment Fee Price'
+  );
+  output = output.replace(
+    /directly tied to the stock price/gi,
+    'tied to a defined contractual price calculation'
+  );
+  output = output.replace(
+    /stock price drops below/gi,
+    'early-warning only: spot price moves below'
+  );
+  output = output.replace(
+    /likely the stock price at the time of the fee calculation/gi,
+    'a contractual calculation that has not yet been confirmed as equivalent to spot price'
+  );
+  output = output.replace(
+    /not a standard feature of equity lines/gi,
+    'easy to miss because it appears in amendment mechanics rather than headline financing terms'
+  );
+  output = output.replace(
+    /the company may have the option to settle (?:the true-up )?in shares/gi,
+    'any equity-settlement mechanism for the true-up is unverified'
+  );
+  output = output.replace(
+    /if the true-up is settled in shares/gi,
+    'if a share-settlement mechanism is later verified'
+  );
+  return output;
+}
+
+function extractMoney(text: string, labelPattern: RegExp): number | null {
+  const match = text.match(labelPattern);
+  if (!match) return null;
+  const raw = match[1].replace(/[$,\s]/g, '').toLowerCase();
+  const multiplier = raw.endsWith('m') ? 1_000_000 : raw.endsWith('k') ? 1_000 : 1;
+  const numeric = Number(raw.replace(/[mk]$/, ''));
+  return Number.isFinite(numeric) ? numeric * multiplier : null;
+}
+
+function extractTrueUpMechanics(text: string) {
+  const maxLiability = extractMoney(text, /(?:maximum payment liability|up to|true-up provision):?\s*\$?([0-9,.]+[mk]?)/i);
+  const factorMatch = text.match(/([0-9,]+)\s*\*\s*commitment fee price/i);
+  const minPriceMatch = text.match(/minimum price(?: threshold)?:?\s*\$?([0-9.]+)/i);
+  const factor = factorMatch ? Number(factorMatch[1].replace(/,/g, '')) : null;
+  const minimumPrice = minPriceMatch ? Number(minPriceMatch[1]) : null;
+
+  if (!maxLiability || !factor) return null;
+  const scenarioPrices = Array.from(new Set([
+    minimumPrice,
+    0.35,
+    0.30,
+    0.20,
+    0.10,
+    0,
+  ].filter((v): v is number => v != null && Number.isFinite(v))));
+
+  return {
+    maxLiability,
+    factor,
+    minimumPrice,
+    scenarios: scenarioPrices.map((price) => ({
+      price,
+      trueUp: Math.max(0, maxLiability - factor * price),
+    })),
+  };
+}
+
+function CheckStatusBadge({ status }: { status: 'verified' | 'partial' | 'pending' | 'failed' }) {
+  const styles = {
+    verified: 'bg-green-100 text-green-700',
+    partial: 'bg-amber-100 text-amber-700',
+    pending: 'bg-gray-100 text-gray-600',
+    failed: 'bg-red-100 text-red-700',
+  };
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${styles[status]}`}>
+      {status}
+    </span>
+  );
+}
+
 function verStatusLabel(s: string | null): { label: string; color: string } {
   switch (s) {
     case 'verified': return { label: 'Verified', color: 'bg-green-100 text-green-800' };
@@ -196,6 +302,100 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
     clusterContext?.researchConfidence ??
     (hiddenAngle?.confidence ? hiddenAngle.confidence * 100 : 0)
   );
+  const researchText = allResearchText([
+    hiddenAngle?.claim,
+    hiddenAngle?.supporting_evidence,
+    hiddenAngle?.reasoning,
+    hiddenAngle?.cashExposure?.trigger,
+    hiddenAngle?.dilutionExposure?.terms,
+    hiddenAngle?.capitalOverhang,
+    opp.summary,
+    ...facts.map((f: any) => f.text),
+    ...inferences.map((i: any) => i.text),
+    ...contradictions.map((r: any) => r.description),
+    ...missingInfo.map((r: any) => r.description),
+  ]);
+  const hasDefinedPriceVariable = usesDefinedContractPrice(researchText);
+  const missingCashOrMarketCap = !opp.security.marketCap || missingInfo.some((r: any) => /cash|liquidity|market cap|market capitalization/i.test(r.description || ''));
+  const missingShareData = missingInfo.some((r: any) => /share count|shares outstanding|settled in shares|settlement|warrant|eloc usage/i.test(r.description || ''));
+  const catalystAttentionPending = attention == null && scores.catalyst_attention == null;
+  const finalScorePending = missingCashOrMarketCap || missingShareData || opp.priceChangePercent == null || catalystAttentionPending || (hasDefinedPriceVariable && /measurement date|definition of commitment fee price|exact definition/i.test(researchText));
+  const trueUpMechanics = extractTrueUpMechanics(researchText);
+  const hasReferencedAgreement = facts.some((f: any) => /\[ref:|referenced agreement|purchase agreement|eloc/i.test(f.text || ''));
+  const hasFormula = facts.some((f: any) => /formula|true-up amount|commitment fee price/i.test(f.text || '')) || !!trueUpMechanics;
+  const hasMinimumPrice = facts.some((f: any) => /minimum price/i.test(f.text || ''));
+  const researchChecks = [
+    {
+      status: facts.length > 0 ? 'verified' as const : 'pending' as const,
+      source: evidence[0]?.document?.source?.name || clusterSignals[0]?.source_type || 'Primary source',
+      check: 'Primary filing reviewed',
+      result: facts.length > 0 ? `${facts.length} verified fact${facts.length === 1 ? '' : 's'} extracted` : 'No extracted facts available yet',
+      why: 'Establishes that the catalyst starts from a public source rather than model-only inference.',
+    },
+    {
+      status: hasFormula ? 'verified' as const : 'pending' as const,
+      source: 'SEC filing / amendment',
+      check: 'Mechanism or formula extracted',
+      result: trueUpMechanics ? `Formula scenarios available using ${trueUpMechanics.factor.toLocaleString()} x Commitment Fee Price` : 'Formula or mechanic not fully extracted yet',
+      why: 'Turns a legal clause into testable contract mechanics.',
+    },
+    {
+      status: hasReferencedAgreement && hasMinimumPrice ? 'verified' as const : hasReferencedAgreement ? 'partial' as const : 'pending' as const,
+      source: 'Referenced agreement',
+      check: 'Cross-document terms resolved',
+      result: hasMinimumPrice ? 'Minimum Price resolved from referenced agreement' : 'Referenced agreement detected; critical terms still need resolution',
+      why: 'Prevents the system from stopping at the first filing when key definitions live elsewhere.',
+    },
+    {
+      status: hasDefinedPriceVariable ? 'partial' as const : 'pending' as const,
+      source: 'Contract definitions',
+      check: 'Trigger variable verified',
+      result: hasDefinedPriceVariable ? 'Defined price variable detected; spot price treated only as early-warning context' : 'No defined trigger variable found yet',
+      why: 'Avoids substituting market price for a contractual calculation.',
+    },
+    {
+      status: missingCashOrMarketCap ? 'pending' as const : 'verified' as const,
+      source: 'Market data / financial statements',
+      check: 'Materiality denominator checked',
+      result: missingCashOrMarketCap ? 'Cash, market cap, revenue, assets, or EV still needed' : 'Denominator available for materiality math',
+      why: 'A dollar amount is only material relative to company scale.',
+    },
+    {
+      status: missingShareData ? 'partial' as const : 'verified' as const,
+      source: 'Capital structure data',
+      check: 'Share and settlement mechanics checked',
+      result: missingShareData ? 'Share count, settlement mechanics, or ELOC usage still unresolved' : 'Capital structure inputs available',
+      why: 'Separates cash exposure from dilution exposure.',
+    },
+    {
+      status: opp.priceChangePercent != null ? 'verified' as const : 'pending' as const,
+      source: 'Market data',
+      check: 'Price reaction measured',
+      result: opp.priceChangePercent != null ? `${opp.priceChangePercent.toFixed(2)}% since filing` : 'Filing-window reaction not computed yet',
+      why: 'Helps decide whether the catalyst is already priced in.',
+    },
+    {
+      status: catalystAttentionPending ? 'pending' as const : 'verified' as const,
+      source: 'Attention engine',
+      check: 'Catalyst attention measured',
+      result: catalystAttentionPending ? 'Media, analyst, and catalyst-specific coverage still pending' : 'Catalyst attention score available',
+      why: 'Information asymmetry should not be asserted before attention is measured.',
+    },
+  ];
+  const researchSources = [
+    ...clusterSignals.map((signal: any) => ({
+      label: signal.source_type || 'Signal source',
+      detail: signal.title || signal.event_type || 'Normalized signal',
+      href: signal.source_url,
+      type: 'Normalized signal',
+    })),
+    ...evidence.slice(0, 4).map((ev: any) => ({
+      label: ev.document?.source?.name || 'Evidence source',
+      detail: ev.document?.title || ev.excerpt || 'Evidence item',
+      href: ev.document?.canonicalUrl,
+      type: ev.evidenceType || 'evidence',
+    })),
+  ];
 
   return (
     <div className="page-container">
@@ -242,15 +442,20 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
         </h2>
         {hiddenAngle ? (
           <div className="space-y-3">
-            <p className="text-base font-medium text-gray-900">{hiddenAngle.claim}</p>
+            <p className="text-base font-medium text-gray-900">{softenContractVariableClaims(hiddenAngle.claim)}</p>
             {hiddenAngle.supporting_evidence && (
               <div className="pl-3 border-l-2 border-brand-300">
                 <span className="text-xs text-gray-500 font-medium">Evidence</span>
-                <p className="text-sm text-gray-700 mt-0.5">{hiddenAngle.supporting_evidence}</p>
+                <p className="text-sm text-gray-700 mt-0.5">{softenContractVariableClaims(hiddenAngle.supporting_evidence)}</p>
               </div>
             )}
             {hiddenAngle.reasoning && (
-              <p className="text-sm text-gray-600">{hiddenAngle.reasoning}</p>
+              <p className="text-sm text-gray-600">{softenContractVariableClaims(hiddenAngle.reasoning)}</p>
+            )}
+            {hasDefinedPriceVariable && (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                Contract-variable guardrail: spot stock price is treated only as an early-warning proxy. The actual trigger depends on the defined Commitment Fee Price calculation unless the contract explicitly makes them equivalent.
+              </p>
             )}
             {hiddenAngle.confidence && (
               <span className="text-xs text-gray-400">
@@ -265,7 +470,80 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
         )}
       </section>
 
-      {/* ── WHAT HIDDEN CATALYST CONNECTED ── */}
+      {/* ── RESEARCH REPORT SUMMARY ── */}
+      <section className="mb-8 grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
+        <div className="card">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Analyst Verdict</h2>
+          <div className="space-y-3">
+            <div>
+              <div className="text-xs font-medium uppercase text-gray-500">Current read</div>
+              <p className="mt-1 text-sm font-medium text-gray-900">
+                {hiddenAngle?.claim ? 'Promising public-signal candidate, still verification-limited.' : 'No validated thesis yet.'}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg bg-gray-50 p-3">
+                <div className="text-xl font-bold text-gray-900">{finalScorePending ? 'Pending' : Math.round(scores.opportunity ?? 0)}</div>
+                <div className="text-xs text-gray-500">{finalScorePending ? 'Final score' : 'Opportunity score'}</div>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-3">
+                <div className="text-xl font-bold text-gray-900">{researchCompleteness || 0}%</div>
+                <div className="text-xs text-gray-500">Research complete</div>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500">
+              The report separates verified facts, contract mechanics, pending denominators, market reaction, and attention analysis. A candidate can be interesting before it is high-conviction.
+            </p>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Research Checks</h2>
+          <div className="space-y-2">
+            {researchChecks.map((check, i) => (
+              <div key={i} className="rounded-lg border border-gray-100 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-gray-900">{check.check}</div>
+                  <CheckStatusBadge status={check.status} />
+                </div>
+                <div className="mt-1 text-xs text-gray-500">{check.source}</div>
+                <p className="mt-1 text-sm text-gray-700">{check.result}</p>
+                <p className="mt-1 text-xs text-gray-400">{check.why}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="mb-8 card">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <h2 className="text-base font-semibold text-gray-900">Research Sources</h2>
+          <span className="text-xs text-gray-400">{researchSources.length} source records</span>
+        </div>
+        {researchSources.length > 0 ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            {researchSources.map((source, i) => {
+              const body = (
+                <div className="rounded-lg border border-gray-100 p-3 hover:bg-gray-50">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge>{source.type}</Badge>
+                    <span className="text-sm font-semibold text-gray-900">{source.label}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">{textOf(source.detail).slice(0, 180)}</p>
+                </div>
+              );
+              return source.href ? (
+                <a key={i} href={source.href} target="_blank" rel="noreferrer">{body}</a>
+              ) : (
+                <div key={i}>{body}</div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">No normalized source records linked yet. Legacy evidence may still appear lower on the page.</p>
+        )}
+      </section>
+
       <section className="mb-8 p-5 rounded-xl bg-gray-50 border border-gray-200">
         <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
           What Hidden Catalyst Connected
@@ -368,7 +646,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           {opp.summary && (
             <section className="card">
               <h2 className="text-base font-semibold text-gray-900 mb-2">Why It Matters</h2>
-              <p className="text-sm text-gray-700 leading-relaxed">{opp.summary}</p>
+              <p className="text-sm text-gray-700 leading-relaxed">{softenContractVariableClaims(opp.summary)}</p>
             </section>
           )}
 
@@ -448,9 +726,9 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 {materiality && (
                   <div className="rounded-lg border border-gray-100 p-3">
                     <div className="text-xs font-medium uppercase text-gray-500">Materiality</div>
-                    <div className="mt-1 text-lg font-bold text-gray-900">{materiality.level || 'UNKNOWN'}</div>
+                    <div className="mt-1 text-lg font-bold text-gray-900">{missingCashOrMarketCap ? 'PARTIAL' : (materiality.level || 'UNKNOWN')}</div>
                     <p className="mt-1 text-xs text-gray-500">
-                      {materiality.metric || 'Metric pending'} {materiality.ratio != null ? `· ${(materiality.ratio * 100).toFixed(1)}%` : ''}
+                      {missingCashOrMarketCap ? 'Denominator pending: cash, market cap, revenue, assets, or EV needed.' : (materiality.metric || 'Metric pending')} {materiality.ratio != null && !missingCashOrMarketCap ? `· ${(materiality.ratio * 100).toFixed(1)}%` : ''}
                     </p>
                   </div>
                 )}
@@ -508,27 +786,57 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             </section>
           )}
 
+          {trueUpMechanics && (
+            <section className="card">
+              <h2 className="text-base font-semibold text-gray-900 mb-3">True-Up Formula Scenarios</h2>
+              <p className="mb-3 text-xs text-gray-500">
+                Illustrative contract mechanics only. These are not predictions and use Commitment Fee Price, not spot price.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-gray-500">
+                      <th className="pb-2 font-medium">Commitment Fee Price</th>
+                      <th className="pb-2 font-medium">Implied True-Up</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trueUpMechanics.scenarios.map((row) => (
+                      <tr key={row.price} className="border-b border-gray-50">
+                        <td className="py-2 font-mono">${row.price.toFixed(row.price < 1 ? 5 : 2)}</td>
+                        <td className="py-2 font-mono">${Math.round(row.trueUp).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
           <section className="card">
             <h2 className="text-base font-semibold text-gray-900 mb-3">Research Scores</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               <div className="p-2 bg-gray-50 rounded">
                 <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">Opportunity</span>
+                  <span className="text-gray-500">{finalScorePending ? 'Prelim Potential' : 'Opportunity'}</span>
                   <span className="font-bold tabular-nums">
                     {opp.priceChangePercent != null ? Math.round(scores.opportunity ?? 0) : (<span className="text-amber-600 text-xs">Prelim</span>)}
                   </span>
                 </div>
-                {opp.priceChangePercent == null && (
+                {finalScorePending && (
+                  <div className="text-[10px] text-amber-600 mt-0.5">Final score pending critical inputs</div>
+                )}
+                {!finalScorePending && opp.priceChangePercent == null && (
                   <div className="text-[10px] text-amber-600 mt-0.5">4/10 inputs — low confidence</div>
                 )}
               </div>
               <div className="p-2 bg-gray-50 rounded">
                 <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">Info Asymmetry</span>
-                  <span className="font-bold tabular-nums">{Math.round(scores.information_asymmetry ?? 0)}</span>
+                  <span className="text-gray-500">{catalystAttentionPending ? 'Info Asymmetry*' : 'Info Asymmetry'}</span>
+                  <span className="font-bold tabular-nums">{catalystAttentionPending ? 'Prelim' : Math.round(scores.information_asymmetry ?? 0)}</span>
                 </div>
                 <div className="mt-1 pt-1 border-t border-gray-200 text-[10px] text-gray-400">
-                  Company: {Math.round(scores.company_attention ?? 0)} · Catalyst: Pending
+                  Company: {Math.round(scores.company_attention ?? 0)} · Catalyst: {catalystAttentionPending ? 'Pending' : Math.round(scores.catalyst_attention ?? 0)}
                 </div>
               </div>
               <div className="p-2 bg-gray-50 rounded">
@@ -611,7 +919,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
               <div className="space-y-2">
                 {facts.map((f, i) => (
                   <div key={i} className="flex items-start gap-2 pl-4 border-l-2 border-green-200">
-                    <p className="text-sm text-gray-700">{f.text}</p>
+                    <p className="text-sm text-gray-700">{softenContractVariableClaims(f.text)}</p>
                   </div>
                 ))}
               </div>
@@ -629,7 +937,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 {inferences.map((inf, i) => (
                   <div key={i} className="flex items-start gap-2 pl-4 border-l-2 border-purple-200">
                     <div>
-                      <p className="text-sm text-gray-700">{inf.text}</p>
+                      <p className="text-sm text-gray-700">{softenContractVariableClaims(inf.text)}</p>
                       {inf.confidence && (
                         <span className="text-xs text-gray-400">Confidence: {Math.round(inf.confidence * 100)}%</span>
                       )}
@@ -648,7 +956,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 {overlookedReasons.map((r, i) => (
                   <li key={i} className="text-sm text-amber-900 flex items-start gap-2">
                     <span className="shrink-0 mt-0.5">•</span>
-                    <span>{r.description}</span>
+                    <span>{softenContractVariableClaims(r.description)}</span>
                   </li>
                 ))}
               </ul>
@@ -664,7 +972,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                 {contradictions.map((r, i) => (
                   <li key={i} className="text-sm text-red-700 flex items-start gap-2">
                     <span className="shrink-0 mt-0.5">✗</span>
-                    <span>{r.description}</span>
+                    <span>{softenContractVariableClaims(r.description)}</span>
                   </li>
                 ))}
               </ul>
@@ -713,7 +1021,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                   return (
                     <li key={i} className="text-sm text-gray-700 flex items-start gap-2">
                       <span className="shrink-0 mt-0.5 text-blue-500">→</span>
-                      <span>{def?.signal || 'Monitoring in progress'}</span>
+                      <span>{softenContractVariableClaims(def?.signal || 'Monitoring in progress')}</span>
                     </li>
                   );
                 })}
@@ -732,7 +1040,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                   return (
                     <li key={i} className="text-sm text-purple-800 flex items-start gap-2">
                       <span className="shrink-0 mt-0.5 text-purple-400">?</span>
-                      <span>{def?.question || def?.signal || 'Unresolved'}</span>
+                      <span>{softenContractVariableClaims(def?.question || def?.signal || 'Unresolved')}</span>
                     </li>
                   );
                 })}
@@ -763,14 +1071,14 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             <h2 className="text-base font-semibold text-gray-900 mb-3">Research Completeness</h2>
             {(() => {
               const hasRefTag = facts.some((f: any) => f.text && f.text.includes('[Ref:'));
-              const cashKnown = hiddenAngle?.cashExposure?.amount != null && !hiddenAngle?.cashExposure?.likelihood?.includes('uncertain');
-              const capStructurePartial = hiddenAngle?.capitalOverhang != null && hiddenAngle?.capitalOverhang?.includes('Partial');
+              const cashKnown = hiddenAngle?.cashExposure?.amount != null && !missingCashOrMarketCap && !hiddenAngle?.cashExposure?.likelihood?.includes('uncertain');
+              const capitalStructureComplete = !!hiddenAngle?.capitalOverhang && !missingShareData && !/partial|unknown|unverified|not yet/i.test(textOf(hiddenAngle.capitalOverhang));
               const checks = [
                 { label: 'Primary source verified', ok: facts.length > 0, weight: 3 },
                 { label: 'Hidden angle identified', ok: !!(hiddenAngle?.claim), weight: 3 },
                 { label: 'Contract terms resolved', ok: hasRefTag ? 'partial' as const : false, weight: 3 },
                 { label: 'Financial materiality', ok: cashKnown ? true : 'partial' as const, weight: 3 },
-                { label: 'Capital structure', ok: capStructurePartial ? 'partial' as const : !!(hiddenAngle?.capitalOverhang), weight: 2 },
+                { label: 'Capital structure', ok: capitalStructureComplete ? true : hiddenAngle?.capitalOverhang ? 'partial' as const : false, weight: 2 },
                 { label: 'Price reaction computed', ok: opp.priceChangePercent != null, weight: 2 },
                 { label: 'Catalyst attention measured', ok: false as const, weight: 1 },
                 { label: 'Counter-evidence search', ok: contradictions.length > 0, weight: 2 },
@@ -929,8 +1237,8 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                   </ul>
                 </div>
                 <p className="text-xs text-blue-600 mt-1">
-                  Opportunity Score ranks candidates after qualification, not before.
-                  Current score: {Math.round(scores.opportunity ?? 0)}/100.
+                  {finalScorePending ? 'Preliminary Opportunity Potential ranks candidates while critical inputs are pending.' : 'Opportunity Score ranks candidates after qualification, not before.'}
+                  {' '}Current preliminary score: {Math.round(scores.opportunity ?? 0)}/100.
                 </p>
               </div>
             </section>
