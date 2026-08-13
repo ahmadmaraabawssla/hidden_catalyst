@@ -69,6 +69,21 @@ function normalizeCompanyName(name: unknown): string | null {
 }
 
 /**
+ * Map a cluster type / source type to a coarse source family for scheduling
+ * diversity. Ensures no single source (e.g. regulatory/clinical) monopolizes
+ * the research budget when other families have eligible clusters.
+ */
+function sourceFamily(clusterTypeOrSource: string): string {
+  const t = String(clusterTypeOrSource || '').toLowerCase();
+  if (/sec_filing|8-?k|10-?k|10-?q|s-?1|13d|proxy|filing/.test(t)) return 'sec';
+  if (/contract|award|grant|customer|sam/.test(t)) return 'contracts';
+  if (/patent|uspto/.test(t)) return 'patents';
+  if (/clinical|trial|fda|approval|drug|device|regulatory|clearance/.test(t)) return 'regulatory';
+  if (/merger|acquisition|legal/.test(t)) return 'corporate';
+  return 'other';
+}
+
+/**
  * Extract a small set of search keywords from a cluster title for attention
  * matching (press-release / news keyword lookups). Returns the company name
  * plus the most distinctive title tokens.
@@ -369,7 +384,7 @@ export function classifyQualification(input: QualificationGateInput) {
   return qualifyOpportunity(input);
 }
 
-export async function triageUnclusteredSignals(limit = 100, minPriority = 55) {
+export async function triageUnclusteredSignals(limit = 100, minPriority = 55, logger?: EngineLogger) {
   // Freshness-first: signals harvested most recently get clustered before old
   // lingering unclustered signals. This prevents prior runs' leftover signals
   // from monopolizing the triage budget ahead of this run's new harvest.
@@ -381,6 +396,17 @@ export async function triageUnclusteredSignals(limit = 100, minPriority = 55) {
     orderBy: [{ retrievedAt: 'desc' }, { triageScore: 'desc' }],
     take: limit,
   });
+
+  // Log why each signal was selected (age, source, score) for auditability.
+  if (logger) {
+    for (const signal of signals) {
+      const ageHours = Math.round((Date.now() - signal.retrievedAt.getTime()) / 3600_000);
+      const family = sourceFamily(signal.sourceType || '');
+      logger.log(`[triage] signal=${signal.id} source=${signal.sourceType} family=${family} score=${signal.triageScore} retrievedAgeHours=${ageHours} title="${String(signal.title || '').slice(0, 60)}"`);
+    }
+    const families = [...new Set(signals.map((s) => sourceFamily(s.sourceType || '')))];
+    logger.log(`[triage] selected ${signals.length} unclustered signals across families=[${families.join(', ')}]`);
+  }
 
   const clusters = [];
   for (const signal of signals) {
@@ -564,7 +590,7 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     try {
       const keywords = extractKeywords(cluster.title, companyContext.companyName);
       attentionProfile = await measureAttention(security.ticker, process.env.FMP_API_KEY, security.marketCap, keywords);
-      logger.log(`[research] cluster=${clusterId} attention=${attentionProfile.attentionScore} pr=${attentionProfile.pressRelease?.found} news=${attentionProfile.news?.count} source=${attentionProfile.source}`);
+      logger.log(`[research] cluster=${clusterId} attention=${attentionProfile.attentionScore} measured=${attentionProfile.measured} pressRelease=${attentionProfile.pressRelease?.found} news=${attentionProfile.news?.count} source=${attentionProfile.source}`);
     } catch {
       attentionProfile = null;
     }
@@ -573,7 +599,7 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     try {
       const eventDate = primary?.publishedAt ?? cluster.firstSeenAt ?? new Date();
       priceReaction = await fetchPriceReaction(security.ticker, new Date(eventDate));
-      logger.log(`[research] cluster=${clusterId} price_reaction=${priceReaction?.marketReaction ?? 'unavailable'}`);
+      logger.log(`[research] cluster=${clusterId} price_reaction=${priceReaction?.marketReaction ?? 'unavailable'} measured=${priceReaction?.measured ?? false}`);
     } catch {
       priceReaction = null;
     }
@@ -586,7 +612,9 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     materiality,
     adversarial,
     priceReactionAvailable: !!priceReaction,
+    priceReactionMeasured: !!priceReaction?.measured,
     attentionAvailable: !!attentionProfile,
+    attentionMeasured: !!attentionProfile?.measured,
     relationshipConfidence: deepResearch.relationshipConfidence,
     deepResearch,
     signals: cluster.signals.map(({ signal }) => ({
@@ -692,7 +720,7 @@ export async function runSourceAgnosticIntelligencePass(params?: {
 }) {
   const logger = createLogger(params?.logLevel);
   logger.log(`[engine] source-agnostic pass start signalLimit=${params?.signalLimit ?? 100} minPriority=${params?.minPriority ?? 55}`);
-  const triage = await triageUnclusteredSignals(params?.signalLimit ?? 100, params?.minPriority ?? 55);
+  const triage = await triageUnclusteredSignals(params?.signalLimit ?? 100, params?.minPriority ?? 55, logger);
   logger.log(`[engine] triage unclusteredSignals=${triage.signals} clustersCreated=${triage.clusters}`);
 
   // ── Scheduling: skip clusters already evaluated within the freshness window ──
@@ -702,7 +730,10 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   const freshnessHours = params?.evalFreshnessHours ?? 12;
   const staleBefore = new Date(Date.now() - freshnessHours * 3600_000);
 
-  const clusters = await prisma.catalystCluster.findMany({
+  const clusterLimit = params?.signalLimit ?? 100;
+  // Fetch a larger candidate pool than the budget so diversity filtering has
+  // enough material to round-robin across source families.
+  const candidates = await prisma.catalystCluster.findMany({
     where: {
       status: { in: ['open', 'triaged'] },
       OR: [
@@ -715,8 +746,34 @@ export async function runSourceAgnosticIntelligencePass(params?: {
       { lastEvaluatedAt: { sort: 'asc', nulls: 'first' } },
       { firstSeenAt: 'desc' },
     ],
-    take: params?.signalLimit ?? 100,
+    take: clusterLimit * 4,
   });
+
+  // ── Source-family diversity: round-robin across families so no single
+  // source (e.g. regulatory/clinical) monopolizes the budget. Within each
+  // family, preserve the scheduling order (never-evaluated first, then stale).
+  const buckets = new Map<string, typeof candidates>();
+  for (const cluster of candidates) {
+    const family = sourceFamily(cluster.clusterType || '');
+    const bucket = buckets.get(family) || [];
+    bucket.push(cluster);
+    buckets.set(family, bucket);
+  }
+  const familySizes = [...buckets.entries()].map(([family, bucket]) => `${family}:${bucket.length}`).join(', ');
+  const clusters = [];
+  const entries = [...buckets.entries()];
+  let progress = true;
+  while (clusters.length < clusterLimit && progress) {
+    progress = false;
+    for (const [, bucket] of entries) {
+      if (clusters.length >= clusterLimit) break;
+      if (bucket.length > 0) {
+        clusters.push(bucket.shift()!);
+        progress = true;
+      }
+    }
+  }
+  logger.log(`[scheduling] candidates=${candidates.length} selected=${clusters.length} families=[${familySizes}]`);
 
   const skippedFresh = await prisma.catalystCluster.count({
     where: {

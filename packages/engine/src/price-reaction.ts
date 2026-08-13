@@ -12,6 +12,13 @@ export interface PriceReactionResult {
   sectorAdjustedReturn: number | null;
   marketReaction: 'minimal' | 'moderate' | 'strong' | 'unknown';
   pricedInScore: number;
+  /**
+   * True only when the reaction is genuinely measured — i.e. there is at
+   * least one trading day of price data AFTER the event date. False when the
+   * event is today/future or has no post-event data, in which case any
+   * computed return is just baseline daily movement, not a reaction.
+   */
+  measured: boolean;
 }
 
 function byDateAsc(a: PricePoint, b: PricePoint) {
@@ -81,6 +88,8 @@ export function calculatePriceReactionWindows(
   const p5 = ret(point(0), point(5));
   const absEvent = eventDay == null ? null : Math.abs(eventDay);
   const marketReaction = absEvent == null ? 'unknown' : absEvent < 1 ? 'minimal' : absEvent < 5 ? 'moderate' : 'strong';
+  // Measured only if there is at least one trading day of post-event data.
+  const measured = point(1)?.close != null;
 
   const baseline = ordered.slice(Math.max(0, idx - 20), Math.max(0, idx - 1));
   const avgVolume = baseline.length
@@ -110,5 +119,6 @@ export function calculatePriceReactionWindows(
     sectorAdjustedReturn: eventDay != null && sectorReturn != null ? eventDay - sectorReturn : null,
     marketReaction,
     pricedInScore,
+    measured,
   };
 }
