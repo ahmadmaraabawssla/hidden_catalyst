@@ -30,6 +30,7 @@ export class FederalContractsConnector extends BaseConnector {
 
     if (companies.length === 0) return [];
     const results: RawDocument[] = [];
+    let requestFailures = 0;
 
     for (const company of companies) {
       try {
@@ -54,7 +55,10 @@ export class FederalContractsConnector extends BaseConnector {
           }),
           signal: AbortSignal.timeout(8000),
         });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          requestFailures++;
+          continue;
+        }
 
         const data = await res.json();
         const awards = data?.results || [];
@@ -77,10 +81,11 @@ export class FederalContractsConnector extends BaseConnector {
             metadata: { agency, amount, obligations, ceiling, awardId, recipient: award?.['Recipient Name'] || company.displayName, period: award?.period_of_performance || { start: award?.['Start Date'], end: award?.['End Date'] }, amendment: award?.modification_number },
           });
         }
-      } catch {}
+      } catch { requestFailures++; }
       await new Promise(r => setTimeout(r, 200));
     }
 
+    if (requestFailures === companies.length) throw new Error('USAspending failed for every tracked company.');
     return results;
   }
 

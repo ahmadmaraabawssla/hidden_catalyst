@@ -12,7 +12,7 @@ import {
   SecDeepResearcher,
   type DeepResearchContext,
 } from '../src';
-import { formatCapabilityLog } from '../src/cli';
+import { formatCapabilityLog, validateProductionConfig } from '../src/cli';
 
 function context(sourceType: string, metadata: Record<string, unknown> = {}): DeepResearchContext {
   return {
@@ -89,6 +89,41 @@ describe('fixture source-to-report flow', () => {
     expect(report.researchChecks.find((check) => check.id === 'deep_research')?.status).toBe('verified');
     expect(['candidate', 'verified']).toContain(report.thesisStatus);
   });
+
+  it('keeps low-materiality contracts on watch even when other checks are complete', async () => {
+    const fixture = context('contract_award', { recipient: 'Example Public Co', agency: 'Department of Energy', awardId: 'A-2' });
+    fixture.signals[0]!.amounts = [{ value: 1_000_000, label: 'award_amount', currency: 'USD' }];
+    const deep = mergeDeepResearch(await createDefaultResearchRegistry().run(fixture));
+    const materiality = computeMateriality({ eventType: 'contract_award', amount: 1_000_000, revenue: 100_000_000 });
+    const adversarial = runDeterministicAdversarialCheck({
+      eventType: 'contract_award', title: fixture.title, thesis: deep.thesis,
+      materialityRatio: materiality.ratio, evidenceQuality: 95, relationshipConfidence: 90,
+    });
+    const report = buildResearchReport({
+      title: fixture.title, eventType: fixture.clusterType, thesis: deep.thesis,
+      signals: fixture.signals, materiality, adversarial, relationshipConfidence: 90,
+      attentionAvailable: true, attentionMeasured: true,
+      priceReactionAvailable: true, priceReactionMeasured: true, deepResearch: deep,
+    });
+    expect(materiality.level).toBe('LOW');
+    expect(report.thesisStatus).toBe('watch');
+    expect(report.qualificationReasons).toContain('Quantified materiality is below the candidate threshold.');
+  });
+
+  it('requires measured attention and price reaction for verified status', async () => {
+    const fixture = context('contract_award', { recipient: 'Example Public Co', agency: 'Department of Energy', awardId: 'A-3' });
+    fixture.signals.push({ ...fixture.signals[0]!, id: 'signal_corroborating', sourceType: 'sec_filing' });
+    const deep = mergeDeepResearch(await new DeepResearchRegistry().register(new ContractDeepResearcher()).run(fixture));
+    const materiality = computeMateriality({ eventType: 'contract_award', amount: 25_000_000, revenue: 100_000_000 });
+    const adversarial = runDeterministicAdversarialCheck({ eventType: fixture.clusterType, title: fixture.title, thesis: deep.thesis, materialityRatio: materiality.ratio, evidenceQuality: 95, relationshipConfidence: 90 });
+    const report = buildResearchReport({
+      title: fixture.title, eventType: fixture.clusterType, thesis: deep.thesis,
+      signals: fixture.signals, materiality, adversarial, relationshipConfidence: 90,
+      attentionAvailable: true, attentionMeasured: false,
+      priceReactionAvailable: true, priceReactionMeasured: false, deepResearch: deep,
+    });
+    expect(report.thesisStatus).toBe('candidate');
+  });
 });
 
 describe('logging safety', () => {
@@ -98,5 +133,20 @@ describe('logging safety', () => {
     expect(line).not.toContain('postgres://');
     expect(line).not.toContain('secret-key');
     expect(line).not.toContain('private@example.com');
+  });
+
+  it('requires market and research credentials in production', () => {
+    expect(() => validateProductionConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://present',
+      SEC_USER_AGENT: 'Hidden Catalyst research@example.com',
+    })).toThrow(/DEEPSEEK_API_KEY, FMP_API_KEY/);
+    expect(() => validateProductionConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgres://present',
+      SEC_USER_AGENT: 'Hidden Catalyst research@example.com',
+      DEEPSEEK_API_KEY: 'present',
+      FMP_API_KEY: 'present',
+    })).not.toThrow();
   });
 });

@@ -144,8 +144,8 @@ function extractTrueUpScenario(inputText: string): ScenarioTable | null {
   if (!maxMatch || !factorMatch) return null;
 
   const multiplier = maxMatch[2]?.toLowerCase() === 'm' ? 1_000_000 : maxMatch[2]?.toLowerCase() === 'k' ? 1_000 : 1;
-  const maxLiability = Number(maxMatch[1].replace(/,/g, '')) * multiplier;
-  const factor = Number(factorMatch[1].replace(/,/g, ''));
+  const maxLiability = Number(maxMatch[1]!.replace(/,/g, '')) * multiplier;
+  const factor = Number(factorMatch[1]!.replace(/,/g, ''));
   const minimumPrice = minPriceMatch ? Number(minPriceMatch[1]) : null;
   if (!Number.isFinite(maxLiability) || !Number.isFinite(factor)) return null;
 
@@ -169,6 +169,8 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
   const definedVariable = hasDefinedPriceVariable(combined);
   const hasMaterialityDenominator = input.materiality.denominator != null;
   const hasMaterialityRatio = input.materiality.ratio != null;
+  const distinctSources = new Set(input.signals.map((signal) => signal.sourceType)).size;
+  const corroborated = input.signals.length >= 2 || distinctSources >= 2;
 
   return [
     {
@@ -188,6 +190,16 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
       check: 'Primary public source reviewed',
       result: hasSignal ? `${input.signals.length} normalized signal${input.signals.length === 1 ? '' : 's'} linked` : 'No normalized signal linked',
       why: 'Research starts from public evidence, not model-only inference.',
+    },
+    {
+      id: 'corroboration',
+      status: corroborated ? 'verified' : 'partial',
+      source: distinctSources > 1 ? `${distinctSources} source families` : input.signals[0]?.sourceType || 'Public source',
+      check: 'Evidence corroborated',
+      result: corroborated
+        ? `${input.signals.length} linked signals across ${distinctSources} source type${distinctSources === 1 ? '' : 's'}`
+        : 'Single public signal only; independent corroboration is still pending',
+      why: 'A single record can establish an event, but corroboration improves relationship and thesis confidence.',
     },
     {
       id: 'amount_or_mechanism',
@@ -275,6 +287,9 @@ function statusFromReport(args: {
   adversarial: AdversarialResult;
   completeness: number;
   relationshipConfidence: number;
+  attentionMeasured: boolean;
+  priceReactionMeasured: boolean;
+  rejectedClaims: number;
 }) {
   const reasons: string[] = [];
   if (!args.hasPrimaryEvidence) reasons.push('No primary public evidence linked.');
@@ -283,14 +298,16 @@ function statusFromReport(args: {
   if (args.relationshipConfidence < 70) reasons.push('Relationship confidence below threshold.');
   if (args.completeness < 60) reasons.push('Research completeness below candidate threshold.');
   if (args.adversarial.fatalContradiction) reasons.push('Fatal contradiction detected.');
+  if (args.materiality.level === 'LOW') reasons.push('Quantified materiality is below the candidate threshold.');
+  if (args.rejectedClaims > 0) reasons.push('One or more thesis claims were rejected by evidence checks.');
 
   if (!args.hasPrimaryEvidence || args.adversarial.fatalContradiction) {
     return { status: 'reject' as ThesisStatus, reasons };
   }
-  if (!args.hasThesis || args.materiality.ratio == null || args.completeness < 60) {
+  if (!args.hasThesis || args.materiality.ratio == null || args.materiality.level === 'LOW' || args.relationshipConfidence < 75 || args.completeness < 70 || args.rejectedClaims > 0) {
     return { status: 'watch' as ThesisStatus, reasons };
   }
-  if (args.completeness >= 85 && args.materiality.level !== 'LOW' && args.relationshipConfidence >= 85 && args.adversarial.confidencePenalty < 20) {
+  if (args.completeness >= 85 && args.relationshipConfidence >= 85 && args.adversarial.confidencePenalty < 20 && args.attentionMeasured && args.priceReactionMeasured) {
     return { status: 'verified' as ThesisStatus, reasons };
   }
   return { status: 'candidate' as ThesisStatus, reasons };
@@ -368,13 +385,16 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     adversarial: input.adversarial,
     completeness,
     relationshipConfidence,
+    attentionMeasured: !!input.attentionMeasured,
+    priceReactionMeasured: !!input.priceReactionMeasured,
+    rejectedClaims: rejectedClaims.length,
   });
   const confidence = clamp(
     35 +
     (input.signals.length > 0 ? 15 : 0) +
     (input.materiality.ratio != null ? 20 : 0) +
-    (input.priceReactionAvailable ? 10 : 0) +
-    (input.attentionAvailable ? 10 : 0) -
+    (input.priceReactionMeasured ? 10 : input.priceReactionAvailable ? 3 : 0) +
+    (input.attentionMeasured ? 10 : input.attentionAvailable ? 3 : 0) -
     input.adversarial.confidencePenalty
   );
   const scenario = extractTrueUpScenario(combined);

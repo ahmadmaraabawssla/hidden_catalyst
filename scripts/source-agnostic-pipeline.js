@@ -1,54 +1,21 @@
-/**
- * Source-agnostic intelligence pipeline.
- *
- * Runs connectors, normalizes public-source records into signals, clusters
- * high-priority signals, evaluates materiality/adversarial gates, and refreshes
- * monitoring state for active opportunities.
- */
+#!/usr/bin/env node
 
-const { runAllConnectors } = require('../packages/connectors/src/runner');
-const {
-  runSourceAgnosticIntelligencePass,
-  evaluateThesisMonitoring,
-} = require('../packages/engine/src');
-const { prisma } = require('../packages/db/src');
+/** Compatibility entry point. The TypeScript CLI owns locking and health gates. */
 
-async function main() {
-  console.log('=== Hidden Catalyst Source-Agnostic Pipeline ===');
+const { spawnSync } = require('child_process');
+const path = require('path');
 
-  console.log('\n[1/3] Harvesting public-source signals...');
-  const connectorResults = await runAllConnectors();
-
-  console.log('\n[2/3] Triage and cluster evaluation...');
-  const intelligence = await runSourceAgnosticIntelligencePass({
-    signalLimit: Number(process.env.SIGNAL_LIMIT || 100),
-    minPriority: Number(process.env.MIN_RESEARCH_PRIORITY || 55),
-    logLevel: process.env.HC_ENGINE_LOG_LEVEL || 'verbose',
-  });
-
-  console.log('\n[3/3] Monitoring active opportunities...');
-  const active = await prisma.opportunity.findMany({
-    where: { status: 'published', verificationStatus: { in: ['watch', 'candidate', 'verified'] } },
-    select: { id: true },
-    take: Number(process.env.MONITOR_LIMIT || 100),
-  });
-
-  const monitoring = [];
-  for (const opp of active) {
-    try {
-      monitoring.push(await evaluateThesisMonitoring(opp.id));
-    } catch (err) {
-      monitoring.push({ opportunityId: opp.id, state: 'unchanged', reasons: [(err && err.message) || 'monitoring failed'] });
-    }
-  }
-
-  console.log('\n=== Pipeline Complete ===');
-  console.log(JSON.stringify({ connectorResults, intelligence, monitored: monitoring.length }, null, 2));
-  await prisma.$disconnect();
-}
-
-main().catch(async (err) => {
-  console.error('Fatal:', err && err.message ? err.message : err);
-  try { await prisma.$disconnect(); } catch (_) {}
-  process.exit(1);
+console.warn('[deprecated] source-agnostic-pipeline.js delegates to pnpm engine:run.');
+const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+const result = spawnSync(pnpmCommand, ['engine:run'], {
+  cwd: path.resolve(__dirname, '..'),
+  stdio: 'inherit',
+  env: process.env,
 });
+
+if (result.error) {
+  console.error('[deprecated] Unable to start the intelligence engine:', result.error.message);
+  process.exitCode = 1;
+} else {
+  process.exitCode = result.status || 0;
+}

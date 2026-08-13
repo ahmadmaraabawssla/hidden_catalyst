@@ -10,6 +10,7 @@
 
 import type { PrismaClient } from '@hidden-catalyst/db';
 import type { NormalizedSignal } from '@hidden-catalyst/domain';
+import { createHash } from 'node:crypto';
 
 export interface ConnectorConfig {
   sourceId: string;
@@ -70,6 +71,7 @@ export interface IngestionResult {
   candidatesCreated: number;
   errors: string[];
   cursor?: string;
+  durationMs?: number;
 }
 
 /**
@@ -85,6 +87,7 @@ export abstract class BaseConnector {
   abstract extract(document: RawDocument): Promise<ExtractionResult>;
 
   async run(): Promise<IngestionResult> {
+    const startedAt = Date.now();
     const runId = await this.startRun();
     const result: IngestionResult = {
       sourceId: this.config.sourceId,
@@ -97,7 +100,7 @@ export abstract class BaseConnector {
     };
 
     try {
-      const rawDocs = await this.fetchDocuments();
+      const rawDocs = await this.withRetry(() => this.fetchDocuments());
       result.documentsFetched = rawDocs.length;
 
       for (const raw of rawDocs) {
@@ -105,8 +108,13 @@ export abstract class BaseConnector {
           const contentHash = await this.hashContent(raw.text + raw.canonicalUrl);
 
           // Check for duplicate
-          const existing = await this.prisma.document.findUnique({
-            where: { contentHash },
+          const existing = await this.prisma.document.findFirst({
+            where: {
+              OR: [
+                { contentHash },
+                { canonicalUrl: raw.canonicalUrl, publishedAt: raw.publishedAt },
+              ],
+            },
           });
 
           if (existing) {
@@ -229,10 +237,13 @@ export abstract class BaseConnector {
         }
       }
 
+      if (result.errors.length > 0) result.status = 'partial';
+      result.durationMs = Date.now() - startedAt;
       await this.completeRun(runId, result);
     } catch (err) {
       result.status = 'failed';
       result.errors.push(`Connector error: ${(err as Error).message}`);
+      result.durationMs = Date.now() - startedAt;
       await this.failRun(runId, result);
     }
 
@@ -240,14 +251,7 @@ export abstract class BaseConnector {
   }
 
   private async hashContent(content: string): Promise<string> {
-    // Simple hash for MVP — use crypto in production
-    let hash = 0;
-    for (let i = 0; i < content.length; i++) {
-      const char = content.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash |= 0;
-    }
-    return `sha256_${Math.abs(hash).toString(16)}`;
+    return createHash('sha256').update(content, 'utf8').digest('hex');
   }
 
   private slugify(text: string): string {
@@ -256,6 +260,22 @@ export abstract class BaseConnector {
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_|_$/g, '')
       .slice(0, 50);
+  }
+
+  private async withRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= this.config.retryPolicy.maxAttempts; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error as Error;
+        if (attempt < this.config.retryPolicy.maxAttempts) {
+          const delayMs = Math.min(this.config.retryPolicy.backoffMs * attempt, 30_000);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+    throw lastError || new Error(`${this.config.name} failed after retries`);
   }
 
   private calculateSignalPriority(signal: NormalizedSignal): { score: number; factors: Record<string, number> } {
@@ -290,13 +310,15 @@ export abstract class BaseConnector {
     await this.prisma.ingestionRun.update({
       where: { id: runId },
       data: {
-        status: 'completed',
+        status: result.status,
         completedAt: new Date(),
         countsJson: {
           fetched: result.documentsFetched,
           new: result.documentsNew,
           duplicates: result.duplicates,
           candidates: result.candidatesCreated,
+          errors: result.errors.length,
+          durationMs: result.durationMs,
         },
       },
     });

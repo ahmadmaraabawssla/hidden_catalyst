@@ -36,7 +36,7 @@ export class FDAConnector extends BaseConnector {
         headers: { 'Accept': 'application/json' },
         signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) return results;
+      if (!res.ok) throw new Error(`openFDA returned HTTP ${res.status}`);
 
       const data = await res.json();
       const items = data?.results || [];
@@ -55,8 +55,8 @@ export class FDAConnector extends BaseConnector {
           metadata: { manufacturer, brand, generic, appNum, source: 'fda', status: item?.submissions?.[0]?.submission_status, actionDate: item?.submissions?.[0]?.submission_status_date },
         });
       }
-    } catch {
-      // openFDA may be rate-limited
+    } catch (error) {
+      throw new Error(`openFDA fetch failed: ${(error as Error).message}`);
     }
 
     return results;
@@ -116,6 +116,7 @@ export class ClinicalTrialsConnector extends BaseConnector {
 
     if (companies.length === 0) return [];
     const results: RawDocument[] = [];
+    let requestFailures = 0;
 
     for (const company of companies) {
       try {
@@ -125,7 +126,10 @@ export class ClinicalTrialsConnector extends BaseConnector {
           headers: { 'Accept': 'application/json' },
           signal: AbortSignal.timeout(5000),
         });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          requestFailures++;
+          continue;
+        }
 
         const data = await res.json();
         const studies = data?.studies || [];
@@ -145,10 +149,11 @@ export class ClinicalTrialsConnector extends BaseConnector {
             metadata: { nctId: id?.nctId, status, company: company.displayName, phase: p?.designModule?.phases?.[0], endpoints: p?.outcomesModule?.primaryOutcomes },
           });
         }
-      } catch {}
+      } catch { requestFailures++; }
       await new Promise(r => setTimeout(r, 200));
     }
 
+    if (requestFailures === companies.length) throw new Error('ClinicalTrials.gov failed for every tracked company.');
     return results;
   }
 

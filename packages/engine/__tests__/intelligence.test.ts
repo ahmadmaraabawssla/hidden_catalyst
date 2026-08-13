@@ -46,6 +46,8 @@ describe('calculatePriceReactionWindows', () => {
     expect(result.returns.p5).not.toBeNull();
     expect(result.pricedInScore).toBeGreaterThanOrEqual(0);
     expect(result.pricedInScore).toBeLessThanOrEqual(100);
+    expect(result.measured).toBe(true);
+    expect(result.returns.eventDay).not.toBeNull();
   });
 });
 

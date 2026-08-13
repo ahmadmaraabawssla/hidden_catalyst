@@ -55,6 +55,7 @@ export class SECEdgarConnector extends BaseConnector {
     const materialForms = new Set(['8-K', '10-Q', '10-K', 'S-1', '13D', '13G']);
     const skipForms = new Set(['3', '4', '5', '3/A', '4/A', '144', 'N-PX', 'NPORT-P', 'N-CSR', 'N-CSRS', '6-K', 'ARS', 'CERT', '25', '8-A12B', 'PX14A6G', 'S-8', '424B2', 'FWP', '25-NSE', 'SD']);
     const documents: RawDocument[] = [];
+    let requestFailures = 0;
 
     for (const company of companies) {
       const cik = String(company.cik).padStart(10, '0');
@@ -66,7 +67,10 @@ export class SECEdgarConnector extends BaseConnector {
           },
           signal: AbortSignal.timeout(10000),
         });
-        if (!response.ok) continue;
+        if (!response.ok) {
+          requestFailures++;
+          continue;
+        }
 
         const data = await response.json();
         const recent = data?.filings?.recent;
@@ -103,11 +107,13 @@ export class SECEdgarConnector extends BaseConnector {
 
         await this.throttle();
       } catch {
-        // Skip companies that fail to fetch; continue the rest
+        requestFailures++;
       }
     }
 
-    console.log(`[SEC EDGAR] Found ${documents.length} recent filings`);
+    if (requestFailures === companies.length) throw new Error('SEC EDGAR failed for every company in the scan universe.');
+
+    console.log(`[SEC EDGAR] Found ${documents.length} recent filings; requestFailures=${requestFailures}`);
     return documents;
   }
 

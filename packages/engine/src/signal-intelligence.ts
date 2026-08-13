@@ -471,22 +471,29 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
       let matched: (typeof candidates)[number] | undefined;
       let matchKind: 'exact' | 'subsidiary' = 'exact';
       // Tier 1: exact normalized-stem match.
-      matched = candidates.find((candidate) =>
+      const exactMatches = candidates.filter((candidate) =>
         normalizeCompanyName(candidate.company.displayName) === stem ||
         normalizeCompanyName(candidate.company.legalName) === stem
       );
+      if (exactMatches.length === 1) matched = exactMatches[0];
+      else if (exactMatches.length > 1) logger.log(`[research] cluster=${clusterId} entity_resolution=ambiguous normalizedName=${stem} matches=${exactMatches.length}`);
       // Tier 2: subsidiary/prefix match — one stem is a prefix of the other,
       // e.g. "BAE Systems Space & Mission Systems Inc" → "BAE Systems PLC".
       // Requires a >=6-char shared prefix to avoid false positives.
       if (!matched && stem.length >= 6) {
-        matched = candidates.find((candidate) => {
+        const subsidiaryMatches = candidates.filter((candidate) => {
           const cs = normalizeCompanyName(candidate.company.displayName) ||
             normalizeCompanyName(candidate.company.legalName);
           if (!cs) return false;
           const shorter = cs.length < stem.length ? cs : stem;
           return shorter.length >= 6 && (stem.startsWith(cs) || cs.startsWith(stem));
         });
-        if (matched) matchKind = 'subsidiary';
+        if (subsidiaryMatches.length === 1) {
+          matched = subsidiaryMatches[0];
+          matchKind = 'subsidiary';
+        } else if (subsidiaryMatches.length > 1) {
+          logger.log(`[research] cluster=${clusterId} entity_resolution=ambiguous subsidiaryName=${stem} matches=${subsidiaryMatches.length}`);
+        }
       }
       if (matched) {
         security = await prisma.security.findFirst({
@@ -586,20 +593,25 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   // ── Attention + event-window price reaction (best-effort, cached) ──
   let attentionProfile = jsonObject(cluster.attentionJson) as any;
   let priceReaction = jsonObject(cluster.priceReactionJson) as any;
-  if (security && !attentionProfile?.attentionScore) {
+  const attentionMeasuredAt = attentionProfile?.measuredAt ? new Date(attentionProfile.measuredAt).getTime() : 0;
+  const priceMeasuredAt = priceReaction?.measuredAt ? new Date(priceReaction.measuredAt).getTime() : 0;
+  const marketContextStaleMs = 24 * 3600_000;
+  if (security && (!attentionProfile?.attentionScore || Date.now() - attentionMeasuredAt > marketContextStaleMs)) {
     try {
       const keywords = extractKeywords(cluster.title, companyContext.companyName);
       attentionProfile = await measureAttention(security.ticker, process.env.FMP_API_KEY, security.marketCap, keywords);
+      attentionProfile.measuredAt = new Date().toISOString();
       logger.log(`[research] cluster=${clusterId} attention=${attentionProfile.attentionScore} measured=${attentionProfile.measured} pressRelease=${attentionProfile.pressRelease?.found} news=${attentionProfile.news?.count} source=${attentionProfile.source}`);
     } catch {
       attentionProfile = null;
     }
   }
-  if (security && !priceReaction?.eventDate) {
+  if (security && (!priceReaction?.eventDate || Date.now() - priceMeasuredAt > marketContextStaleMs)) {
     try {
       const eventDate = primary?.publishedAt ?? cluster.firstSeenAt ?? new Date();
       priceReaction = await fetchPriceReaction(security.ticker, new Date(eventDate));
-      logger.log(`[research] cluster=${clusterId} price_reaction=${priceReaction?.marketReaction ?? 'unavailable'} measured=${priceReaction?.measured ?? false}`);
+      if (priceReaction) priceReaction.measuredAt = new Date().toISOString();
+      logger.log(`[research] cluster=${clusterId} price_reaction=${priceReaction?.marketReaction ?? 'unavailable'} measured=${priceReaction?.measured ?? false} eventDay=${priceReaction?.returns?.eventDay ?? 'n/a'} p1=${priceReaction?.returns?.p1 ?? 'n/a'} p5=${priceReaction?.returns?.p5 ?? 'n/a'} volumeVsBaseline=${priceReaction?.volumeVsBaseline ?? 'n/a'} pricedIn=${priceReaction?.pricedInScore ?? 'n/a'}`);
     } catch {
       priceReaction = null;
     }
@@ -717,6 +729,7 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   minPriority?: number;
   logLevel?: EngineLogLevel;
   evalFreshnessHours?: number;
+  maxFamilyShare?: number;
 }) {
   const logger = createLogger(params?.logLevel);
   logger.log(`[engine] source-agnostic pass start signalLimit=${params?.signalLimit ?? 100} minPriority=${params?.minPriority ?? 55}`);
@@ -762,18 +775,28 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   const familySizes = [...buckets.entries()].map(([family, bucket]) => `${family}:${bucket.length}`).join(', ');
   const clusters = [];
   const entries = [...buckets.entries()];
+  const maxFamilyShare = Math.max(0.1, Math.min(1, params?.maxFamilyShare ?? 0.5));
+  const familyCap = buckets.size > 1 ? Math.max(1, Math.ceil(clusterLimit * maxFamilyShare)) : clusterLimit;
+  const selectedPerFamily = new Map<string, number>();
   let progress = true;
   while (clusters.length < clusterLimit && progress) {
     progress = false;
-    for (const [, bucket] of entries) {
+    for (const [family, bucket] of entries) {
       if (clusters.length >= clusterLimit) break;
-      if (bucket.length > 0) {
+      if (bucket.length > 0 && (selectedPerFamily.get(family) || 0) < familyCap) {
         clusters.push(bucket.shift()!);
+        selectedPerFamily.set(family, (selectedPerFamily.get(family) || 0) + 1);
         progress = true;
       }
     }
   }
-  logger.log(`[scheduling] candidates=${candidates.length} selected=${clusters.length} families=[${familySizes}]`);
+  const selectedFamilies = new Map<string, number>();
+  for (const cluster of clusters) {
+    const family = sourceFamily(cluster.clusterType || '');
+    selectedFamilies.set(family, (selectedFamilies.get(family) || 0) + 1);
+  }
+  const selectedFamilySizes = [...selectedFamilies.entries()].map(([family, count]) => `${family}:${count}`).join(', ');
+  logger.log(`[scheduling] candidates=${candidates.length} selected=${clusters.length} familyCap=${familyCap} eligibleFamilies=[${familySizes}] selectedFamilies=[${selectedFamilySizes}]`);
 
   const skippedFresh = await prisma.catalystCluster.count({
     where: {
@@ -787,12 +810,18 @@ export async function runSourceAgnosticIntelligencePass(params?: {
 
   const evaluated = [];
   const logs: ResearchEvaluationLog[] = [];
+  const failures: Array<{ clusterId: string; error: string }> = [];
   for (const cluster of clusters) {
-    const result = await evaluateClusterForOpportunity(cluster.id, { logLevel: params?.logLevel });
-    evaluated.push(result);
-    logs.push(result.log);
+    try {
+      const result = await evaluateClusterForOpportunity(cluster.id, { logLevel: params?.logLevel });
+      evaluated.push(result);
+      logs.push(result.log);
+    } catch (error) {
+      failures.push({ clusterId: cluster.id, error: (error as Error).message });
+      logger.log(`[engine] cluster=${cluster.id} evaluation=failed error=${JSON.stringify((error as Error).message)}`);
+    }
   }
 
-  logger.log(`[engine] pass complete evaluated=${evaluated.length} skippedFresh=${skippedFresh}`);
-  return { triage, evaluated: evaluated.length, skippedFresh, logs };
+  logger.log(`[engine] pass complete evaluated=${evaluated.length} failed=${failures.length} skippedFresh=${skippedFresh}`);
+  return { triage, evaluated: evaluated.length, failures, skippedFresh, logs };
 }

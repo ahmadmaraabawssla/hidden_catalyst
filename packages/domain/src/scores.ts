@@ -118,7 +118,7 @@ export function calculateOpportunityScore(
       liquidityPenalty: input.liquidityPenalty,
       dilutionPenalty: input.dilutionPenalty,
     },
-    weights,
+    weights: { ...weights },
     confidence,
     modelVersion: SCORE_MODEL_VERSION,
   };
@@ -169,7 +169,7 @@ export function calculateResearchPriority(input: ResearchPriorityInput): ScoreRe
     scoreType: 'research_priority',
     value: Math.round(clamp(raw, 1, 100)),
     factors: { ...input },
-    weights,
+    weights: { ...weights },
     confidence: 1,
     modelVersion: SCORE_MODEL_VERSION,
   };

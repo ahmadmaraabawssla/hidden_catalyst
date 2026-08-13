@@ -23,7 +23,8 @@ export async function runAllConnectors(): Promise<Record<string, IngestionResult
     console.log(`Running connector: ${connector.config.name}...`);
     try {
       results[connector.config.sourceId] = await connector.run();
-      console.log(`  ✓ ${connector.config.name}: ${results[connector.config.sourceId]?.documentsNew} new docs`);
+      const result = results[connector.config.sourceId]!;
+      console.log(`[connector] source=${connector.config.sourceId} status=${result.status} fetched=${result.documentsFetched} added=${result.documentsNew} duplicates=${result.duplicates} errors=${result.errors.length} durationMs=${result.durationMs ?? 0}`);
     } catch (err) {
       console.error(`  ✗ ${connector.config.name}: ${(err as Error).message}`);
       results[connector.config.sourceId] = {
@@ -34,6 +35,7 @@ export async function runAllConnectors(): Promise<Record<string, IngestionResult
         duplicates: 0,
         candidatesCreated: 0,
         errors: [(err as Error).message],
+        durationMs: 0,
       };
     }
   }

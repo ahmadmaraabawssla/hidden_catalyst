@@ -77,7 +77,8 @@ export async function checkPressReleases(
  */
 export async function countNewsMentions(
   ticker: string,
-  apiKey: string | undefined
+  apiKey: string | undefined,
+  keywords: string[] = []
 ): Promise<NewsMentions> {
   try {
     if (!apiKey) return { count: 0, sentiment: 0 };
@@ -94,7 +95,9 @@ export async function countNewsMentions(
     let totalSentiment = 0;
     for (const item of data) {
       const publishedDate = item.publishedDate ? new Date(item.publishedDate as string).getTime() : 0;
-      if (publishedDate > weekAgo) {
+      const articleText = `${String(item.title || '')} ${String(item.text || '')}`.toLowerCase();
+      const catalystMatch = keywords.length > 0 && keywords.some((keyword) => articleText.includes(keyword.toLowerCase()));
+      if (publishedDate > weekAgo && catalystMatch) {
         count++;
         totalSentiment += parseFloat(item.sentiment as string) || 0;
       }
@@ -167,7 +170,7 @@ export async function measureAttention(
 
   const [pressRelease, news] = await Promise.all([
     checkPressReleases(ticker, apiKey, keywords || []),
-    countNewsMentions(ticker, apiKey),
+    countNewsMentions(ticker, apiKey, keywords || []),
   ]);
 
   const score = computeAttentionScore(marketCap ?? 800000000, pressRelease.found, news.count, ticker);

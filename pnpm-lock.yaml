@@ -92,6 +92,9 @@ importers:
       '@hidden-catalyst/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       typescript:
         specifier: ^5.5.0
         version: 5.9.3

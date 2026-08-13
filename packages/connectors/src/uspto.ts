@@ -30,6 +30,7 @@ export class USPTOConnector extends BaseConnector {
 
     if (companies.length === 0) return [];
     const results: RawDocument[] = [];
+    let requestFailures = 0;
 
     for (const company of companies) {
       try {
@@ -40,7 +41,10 @@ export class USPTOConnector extends BaseConnector {
           headers: { 'Accept': 'application/json' },
           signal: AbortSignal.timeout(8000),
         });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          requestFailures++;
+          continue;
+        }
 
         const data = await res.json();
         const patents = data?.patents || data?.results || [];
@@ -58,10 +62,11 @@ export class USPTOConnector extends BaseConnector {
             metadata: { patentNumber: patNum, assignee, title },
           });
         }
-      } catch {}
+      } catch { requestFailures++; }
       await new Promise(r => setTimeout(r, 300));
     }
 
+    if (requestFailures === companies.length) throw new Error('USPTO failed for every tracked company.');
     return results;
   }
 

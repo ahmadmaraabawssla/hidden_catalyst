@@ -291,9 +291,27 @@ export class DeepResearchRegistry {
     const results: DeepResearchResult[] = [];
     for (const researcher of selected) {
       context.log?.('deep researcher started', { researcher: researcher.id, family: researcher.family });
-      const result = await researcher.research(context);
-      results.push(result);
-      context.log?.('deep researcher completed', { researcher: researcher.id, facts: result.verifiedFacts.length, missing: result.missingInputs.length });
+      try {
+        const result = await researcher.research(context);
+        results.push(result);
+        context.log?.('deep researcher completed', { researcher: researcher.id, facts: result.verifiedFacts.length, missing: result.missingInputs.length });
+      } catch (error) {
+        context.log?.('deep researcher failed', { researcher: researcher.id, error: (error as Error).message });
+        results.push({
+          researcher: researcher.id,
+          family: researcher.family,
+          summary: `${researcher.id} failed; the cluster remains incomplete.`,
+          verifiedFacts: [],
+          inferredClaims: [],
+          contradictions: [],
+          missingInputs: [`${researcher.id} failed: ${(error as Error).message}`],
+          openQuestions: ['Retry source-specific deep research before promotion.'],
+          amounts: [],
+          relationshipConfidence: 0,
+          attributes: { failed: true },
+          evidenceUrls: [],
+        });
+      }
     }
     return results;
   }
@@ -319,7 +337,7 @@ export function mergeDeepResearch(results: DeepResearchResult[]) {
     amounts: results.flatMap((result) => result.amounts),
     relationshipConfidence: results.length ? Math.round(results.reduce((sum, result) => sum + result.relationshipConfidence, 0) / results.length) : 50,
     evidenceUrls: unique(results.flatMap((result) => result.evidenceUrls)),
-    researchers: results.map((result) => result.researcher),
+    researchers: results.filter((result) => result.attributes.failed !== true).map((result) => result.researcher),
     results,
   };
 }
