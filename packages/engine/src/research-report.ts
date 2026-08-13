@@ -80,7 +80,9 @@ export interface ResearchReportInput {
   materiality: MaterialityResult;
   adversarial: AdversarialResult;
   priceReactionAvailable?: boolean;
+  priceReactionMeasured?: boolean;
   attentionAvailable?: boolean;
+  attentionMeasured?: boolean;
   relationshipConfidence?: number | null;
   deepResearch?: {
     summary?: string;
@@ -217,18 +219,30 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
     },
     {
       id: 'attention',
-      status: input.attentionAvailable ? 'verified' : 'pending',
+      status: input.attentionAvailable
+        ? (input.attentionMeasured ? 'verified' : 'partial')
+        : 'pending',
       source: 'Attention engine',
       check: 'Catalyst attention measured',
-      result: input.attentionAvailable ? 'Catalyst-specific attention is available' : 'Media, analyst, and catalyst-specific coverage still pending',
+      result: input.attentionAvailable
+        ? (input.attentionMeasured
+          ? 'Catalyst-specific attention measured (matching press release or recent news)'
+          : 'Company-level proxy only — no catalyst-specific coverage observed')
+        : 'Media, analyst, and catalyst-specific coverage still pending',
       why: 'Information asymmetry should be measured, not assumed.',
     },
     {
       id: 'price_reaction',
-      status: input.priceReactionAvailable ? 'verified' : 'pending',
+      status: input.priceReactionAvailable
+        ? (input.priceReactionMeasured ? 'verified' : 'partial')
+        : 'pending',
       source: 'Market data',
       check: 'Price reaction measured',
-      result: input.priceReactionAvailable ? 'Event-window price reaction is available' : 'Event-window price reaction still pending',
+      result: input.priceReactionAvailable
+        ? (input.priceReactionMeasured
+          ? 'Event-window price reaction measured from historical prices'
+          : 'Price history present but event-window reaction is an estimate (no reliable event-day return)')
+        : 'Event-window price reaction still pending',
       why: 'Determines whether the catalyst may already be priced in.',
     },
     {
@@ -312,11 +326,13 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
         : 'Materiality denominator is missing.',
     });
   }
-  if (!input.attentionAvailable) {
+  if (!input.attentionMeasured) {
     unverifiedClaims.push({
       status: 'unverified',
       text: 'The catalyst is overlooked or not priced in.',
-      reason: 'Catalyst attention has not been measured.',
+      reason: input.attentionAvailable
+        ? 'Only a company-level attention proxy is available — no catalyst-specific coverage observed.'
+        : 'Catalyst attention has not been measured.',
     });
   }
 

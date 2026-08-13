@@ -29,6 +29,12 @@ export interface AttentionProfile {
   pressRelease: PressReleaseCheck;
   news: NewsMentions;
   source: 'fmp' | 'estimate';
+  /**
+   * True only when catalyst-specific attention was actually observed
+   * (a matching press release or recent news mentions). False when the
+   * score is a market-cap-derived proxy with no observed coverage.
+   */
+  measured: boolean;
 }
 
 /**
@@ -155,6 +161,7 @@ export async function measureAttention(
       pressRelease: { found: false, count: 0, headlines: [] },
       news: { count: 0, sentiment: 0 },
       source: 'estimate',
+      measured: false,
     };
   }
 
@@ -170,5 +177,9 @@ export async function measureAttention(
     pressRelease,
     news,
     source: 'fmp',
+    // Only count as "measured" when we actually observed catalyst-specific
+    // coverage — a matching press release or recent news mentions. A
+    // market-cap-only score with zero coverage is a proxy, not a measurement.
+    measured: pressRelease.found || news.count > 0,
   };
 }
