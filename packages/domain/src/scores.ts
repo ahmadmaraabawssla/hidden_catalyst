@@ -64,7 +64,7 @@ export interface ScoreResult {
   scoreType: ScoreType;
   value: number;
   factors: Record<string, number>;
-  weights: Record<string, number>;
+  weights: ScoreWeights | Record<string, number>;
   confidence: number;
   modelVersion: string;
 }

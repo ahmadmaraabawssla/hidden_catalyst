@@ -42,60 +42,55 @@ export default function LandingPage() {
             <h3 className="text-lg font-semibold text-gray-900">Evidence First</h3>
             <p className="mt-2 text-sm text-gray-600">
               Every surfaced opportunity is backed by primary-source documents with full
-              traceability. Verified facts are clearly separated from inferences and estimates.
+              traceability. Verified facts are separated from inferences, unverified claims,
+              and rejected claims.
             </p>
           </div>
           <div className="card">
             <div className="mb-3 text-3xl">⚖️</div>
-            <h3 className="text-lg font-semibold text-gray-900">Explainable Scoring</h3>
+            <h3 className="text-lg font-semibold text-gray-900">Honest Epistemics</h3>
             <p className="mt-2 text-sm text-gray-600">
-              No black boxes. Every score exposes its raw factors, weights, model version,
-              and confidence level. You decide what matters.
+              Each thesis runs through eight named checks. &quot;Measured&quot; data is never
+              conflated with market-cap proxies or estimates — the report tells you which is which.
             </p>
           </div>
           <div className="card">
             <div className="mb-3 text-3xl">🛡️</div>
             <h3 className="text-lg font-semibold text-gray-900">No Hype, No Promises</h3>
             <p className="mt-2 text-sm text-gray-600">
-              We describe catalysts and scenarios — not guaranteed outcomes. Risk flags,
-              invalidation conditions, and limitations are always shown.
+              We describe catalysts and scenarios — not guaranteed outcomes. An adversarial pass
+              actively tries to weaken every thesis before it can advance.
             </p>
           </div>
         </div>
       </section>
 
-      {/* Example opportunity card */}
+      {/* How the report works */}
       <section className="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
-        <h2 className="text-2xl font-bold text-gray-900 mb-8">See It In Action</h2>
-        <div className="card max-w-2xl">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-sm font-semibold text-gray-900">Example Systems</span>
-            <span className="text-sm text-gray-500">EXM · NASDAQ</span>
-            <span className="text-xs text-gray-400">$780M Market Cap</span>
+        <h2 className="mb-6 text-2xl font-bold text-gray-900">A Research Report, Not a Score</h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-900">The eight epistemic checks</h3>
+            <ul className="space-y-2 text-sm text-gray-600">
+              <li>· Source-specific deep research completed</li>
+              <li>· Primary public source reviewed</li>
+              <li>· Economic mechanism identified</li>
+              <li>· Defined trigger variable checked</li>
+              <li>· Materiality denominator checked</li>
+              <li>· Catalyst attention measured (not proxied)</li>
+              <li>· Price reaction measured (not estimated)</li>
+              <li>· Counter-thesis evaluated</li>
+            </ul>
           </div>
-          <h3 className="font-semibold text-brand-700">
-            Federal contract modification expands program ceiling
-          </h3>
-          <div className="mt-2 flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-              Verified Fact
-            </span>
-            <span className="text-sm text-gray-700">
-              The agency published a contract modification increasing the ceiling by $42M.
-            </span>
-          </div>
-          <div className="mt-1 flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">
-              Inference
-            </span>
-            <span className="text-sm text-gray-600">
-              The modification may expand addressable revenue by 12-18% over two years.
-            </span>
-          </div>
-          <div className="mt-4 flex items-center gap-4 text-sm">
-            <span className="font-semibold text-brand-700">Opportunity Score: 78</span>
-            <span className="text-gray-500">Evidence: 4 items</span>
-            <span className="text-gray-500">3 reasons it may be overlooked</span>
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-900">Measured vs. proxy, always labeled</h3>
+            <p className="text-sm text-gray-600">
+              Attention from actual news coverage is <span className="font-medium text-emerald-700">measured</span>.
+              A market-cap-derived score with zero observed coverage is labeled a{' '}
+              <span className="font-medium text-amber-700">proxy</span>. A price reaction with no
+              post-event trading day is an <span className="font-medium text-amber-700">estimate</span> —
+              never reported as if it were evidence.
+            </p>
           </div>
         </div>
       </section>

@@ -3,186 +3,183 @@ export default function MethodologyPage() {
     <div className="page-container max-w-3xl">
       <h1 className="text-3xl font-bold text-gray-900 mb-2">Methodology</h1>
       <p className="text-gray-500 mb-8">
-        How Hidden Catalyst scores, ranks, and presents opportunities. No black boxes.
+        How Hidden Catalyst researches, verifies, and presents opportunities. No black boxes, no fake scores.
       </p>
 
       <div className="space-y-10">
-        {/* Opportunity Score */}
+        {/* Epistemic framework */}
         <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Opportunity Score Formula</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">The Research Report, Not a Score</h2>
+          <p className="mb-4 text-sm text-gray-600">
+            Every candidate goes through a source-agnostic research pipeline that produces an{' '}
+            <span className="font-medium text-gray-800">epistemic report</span> — not a single
+            weighted number. A thesis advances only when its evidence does, and each gap is labeled
+            explicitly.
+          </p>
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-900">The eight epistemic checks</h3>
+            <ol className="space-y-3 text-sm text-gray-700">
+              {[
+                ['Source-specific deep research completed', 'A source-specific researcher (SEC, contracts, regulatory, patents) examines the normalized signal rather than relying on metadata alone.'],
+                ['Primary public source reviewed', 'The catalyst must trace to a linked public document — not model-only inference.'],
+                ['Economic mechanism identified', 'A testable economic mechanism or extracted dollar amount.'],
+                ['Defined trigger variable checked', 'For contractual catalysts, the defined variable (e.g. Commitment Fee Price) is separated from spot price to avoid conflation.'],
+                ['Materiality denominator checked', 'A dollar amount is only material relative to company scale (revenue, cash, assets, EV, or market cap).'],
+                ['Catalyst attention measured', 'Attention is measured only from observed coverage (matching press releases or recent news) — never asserted from a market-cap proxy.'],
+                ['Price reaction measured', 'A price reaction is measured only when post-event trading data exists; otherwise it is an estimate, not evidence.'],
+                ['Counter-thesis evaluated', 'An adversarial pass actively tries to weaken the thesis before it can advance.'],
+              ].map(([check, why], i) => (
+                <li key={i} className="flex gap-3">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-bold text-brand-700">
+                    {i + 1}
+                  </span>
+                  <span>
+                    <span className="font-medium text-gray-900">{check}.</span>{' '}
+                    <span className="text-gray-600">{why}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </section>
+
+        {/* Check states */}
+        <section>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Check States</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="card">
+              <h3 className="font-semibold text-emerald-700">Verified</h3>
+              <p className="mt-1 text-sm text-gray-600">The check passed with real, measured data.</p>
+            </div>
+            <div className="card">
+              <h3 className="font-semibold text-amber-700">Partial</h3>
+              <p className="mt-1 text-sm text-gray-600">Partially satisfied — e.g. a denominator exists but the event amount is still missing, or only a proxy is available.</p>
+            </div>
+            <div className="card">
+              <h3 className="font-semibold text-gray-700">Pending</h3>
+              <p className="mt-1 text-sm text-gray-600">Not yet satisfied — the input is still being researched.</p>
+            </div>
+            <div className="card">
+              <h3 className="font-semibold text-slate-500">Not Applicable</h3>
+              <p className="mt-1 text-sm text-gray-600">The check does not apply to this catalyst type.</p>
+            </div>
+          </div>
+        </section>
+
+        {/* Thesis statuses */}
+        <section>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Thesis Statuses</h2>
           <div className="card overflow-x-auto">
-            <pre className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-{`Opportunity Score (v2.0) =
-  0.25 × Information Asymmetry
-+ 0.20 × Catalyst Strength
-+ 0.20 × Evidence Quality
-+ 0.15 × Financial Materiality
-+ 0.10 × Timing
-+ 0.10 × Price-Reaction Score
-− 0.10 × Risk Penalty
-− 0.05 × Liquidity Penalty
-− 0.05 × Dilution Penalty
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left">
+                  <th className="pb-2 font-semibold text-gray-900">Status</th>
+                  <th className="pb-2 font-semibold text-gray-900">Meaning</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-600">
+                <tr className="border-b">
+                  <td className="py-2 font-medium text-emerald-700">Verified</td>
+                  <td className="py-2">Passed all gates including measured attention and price reaction.</td>
+                </tr>
+                <tr className="border-b">
+                  <td className="py-2 font-medium text-blue-700">Candidate</td>
+                  <td className="py-2">Strong signal, but not yet high-conviction.</td>
+                </tr>
+                <tr className="border-b">
+                  <td className="py-2 font-medium text-amber-700">Watch</td>
+                  <td className="py-2">Still missing critical verification inputs — materiality, attention, or price reaction.</td>
+                </tr>
+                <tr>
+                  <td className="py-2 font-medium text-rose-700">Rejected</td>
+                  <td className="py-2">Did not survive the epistemic checks.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs text-gray-500">
+            Only <span className="font-medium text-emerald-700">verified</span> and{' '}
+            <span className="font-medium text-blue-700">candidate</span> theses appear in the Qualified feed.
+            Everything else remains in the Research Queue until it matures or is rejected.
+          </p>
+        </section>
 
-Final output is clamped to 1-100.
-
-Note: Valuation Context has been removed from v1.0.
-Information Asymmetry weight increased to better
-surface genuinely underfollowed companies.`}
-            </pre>
+        {/* Measured vs proxy */}
+        <section>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Measured vs. Proxy / Estimate</h2>
+          <p className="mb-4 text-sm text-gray-600">
+            A core discipline of the platform is never conflating measured data with proxies or
+            estimates.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="card border-emerald-200 bg-emerald-50/40">
+              <h3 className="font-semibold text-emerald-800">Measured</h3>
+              <p className="mt-1 text-sm text-gray-600">
+                Attention derived from observed coverage (a matching press release or recent news
+                mention). Price reaction derived from real post-event trading data.
+              </p>
+            </div>
+            <div className="card border-amber-200 bg-amber-50/40">
+              <h3 className="font-semibold text-amber-800">Proxy / Estimate</h3>
+              <p className="mt-1 text-sm text-gray-600">
+                A market-cap-derived attention score with zero observed coverage, or a price
+                &quot;reaction&quot; with no post-event trading day. Always labeled, never counted as verified.
+              </p>
+            </div>
           </div>
         </section>
 
-        {/* Score definitions */}
+        {/* Claim labels */}
         <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Score Components</h2>
-          <div className="space-y-4">
-            {[
-              {
-                name: 'Information Asymmetry (1-100)',
-                desc: 'Measures how underfollowed or difficult to discover the signal appears. Factors include analyst count, news article volume, social/search activity, source complexity, local-language barriers, institutional ownership, and price/volatility responsiveness.',
-              },
-              {
-                name: 'Catalyst Strength (1-100)',
-                desc: 'Evaluates potential business significance if the catalyst occurs or persists. Factors include revenue/profit potential, duration, recurrence, strategic importance, probability, regulatory significance, customer quality, and competitive advantage.',
-              },
-              {
-                name: 'Evidence Quality (1-100)',
-                desc: 'Assesses reliability, specificity, freshness, and independence of supporting evidence. Primary sources, official filings, independent confirmations, and recent documents score higher.',
-              },
-              {
-                name: 'Financial Materiality (1-100)',
-                desc: 'Estimates financial significance relative to company scale. Considers contract value, revenue/EBITDA impact, capex burden, balance-sheet effects, and company dependency.',
-              },
-              {
-                name: 'Timing (1-100)',
-                desc: 'Measures how actionable and time-bounded the catalyst is. Imminent decisions, known deadlines, and scheduled events score higher.',
-              },
-              {
-                name: 'Price Reaction (1-100)',
-                desc: 'Evaluates how little the market appears to have reacted after controlling for peer and sector movements. Lower reaction suggests the information may not be widely priced in.',
-              },
-              {
-                name: 'Risk (1-100)',
-                desc: 'Aggregate downside and uncertainty. Higher scores mean riskier. Includes liquidity, dilution, binary outcomes, legal uncertainty, customer concentration, and promotional history.',
-              },
-            ].map((item) => (
-              <div key={item.name} className="card">
-                <h3 className="font-semibold text-gray-900">{item.name}</h3>
-                <p className="mt-1 text-sm text-gray-600">{item.desc}</p>
-              </div>
-            ))}
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Claim Labels</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="card">
+              <h3 className="font-semibold text-emerald-700">Verified Fact</h3>
+              <p className="mt-1 text-sm text-gray-600">Extracted from a source document with a preserved evidence link.</p>
+            </div>
+            <div className="card">
+              <h3 className="font-semibold text-purple-700">Inference</h3>
+              <p className="mt-1 text-sm text-gray-600">Reasoning synthesized from one or more verified facts.</p>
+            </div>
+            <div className="card">
+              <h3 className="font-semibold text-amber-700">Unverified Claim</h3>
+              <p className="mt-1 text-sm text-gray-600">Not yet proven — shown with the reason it remains unverified.</p>
+            </div>
+            <div className="card">
+              <h3 className="font-semibold text-rose-700">Rejected Claim</h3>
+              <p className="mt-1 text-sm text-gray-600">Failed an evidence check and is explicitly flagged.</p>
+            </div>
           </div>
         </section>
 
-        {/* Data Sources */}
+        {/* Data sources */}
         <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Data Sources</h2>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">Data Sources</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {[
-              { name: 'SEC EDGAR', desc: '8-K, 10-Q, 10-K, S-1, 13D/G filings. Raw filing text downloaded and analyzed by DeepSeek AI.' },
-              { name: 'FMP (Financial Modeling Prep)', desc: 'Real-time prices, market cap, analyst recommendations, institutional ownership.' },
+              { name: 'SEC EDGAR', desc: '8-K, 10-Q, 10-K, S-1, 13D/G filings — full-text parsing with per-company CIK lookups.' },
+              { name: 'FMP (Financial Modeling Prep)', desc: 'Prices, market caps, revenue, cash, assets, shares — used for materiality denominators.' },
               { name: 'USPTO', desc: 'Patent grants and applications for tracked companies.' },
               { name: 'FDA (openFDA)', desc: 'Drug approvals, designations, and regulatory actions.' },
               { name: 'ClinicalTrials.gov', desc: 'Trial registrations, status updates, and results.' },
               { name: 'SAM.gov / USASpending', desc: 'Federal contract awards and modifications.' },
-              { name: 'DeepSeek AI', desc: 'LLM extraction of event type, materiality, dollar amounts, overlooked reasons, and risk flags from filing text.' },
+              { name: 'DeepSeek AI', desc: 'LLM extraction of event type, dollar amounts, and contract mechanics from filing text.' },
             ].map((src) => (
               <div key={src.name} className="card">
-                <h3 className="font-semibold text-gray-900 text-sm">{src.name}</h3>
+                <h3 className="text-sm font-semibold text-gray-900">{src.name}</h3>
                 <p className="mt-1 text-xs text-gray-600">{src.desc}</p>
               </div>
             ))}
           </div>
         </section>
 
-        {/* Publication gates */}
-        <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Publication Gates</h2>
-          <p className="text-sm text-gray-600 mb-4">
-            Opportunities must pass these gates before auto-publication. If any gate fails, the candidate
-            goes to human review.
-          </p>
-          <div className="card overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left">
-                  <th className="pb-2 font-semibold text-gray-900">Gate</th>
-                  <th className="pb-2 font-semibold text-gray-900">Auto-Publish Threshold</th>
-                  <th className="pb-2 font-semibold text-gray-900">Otherwise</th>
-                </tr>
-              </thead>
-              <tbody className="text-gray-600">
-                <tr className="border-b">
-                  <td className="py-2">Evidence</td>
-                  <td className="py-2">Evidence Quality ≥ 70 + at least one primary source</td>
-                  <td className="py-2">Manual review</td>
-                </tr>
-                <tr className="border-b">
-                  <td className="py-2">Entity Mapping</td>
-                  <td className="py-2">Security mapping confidence ≥ 0.95</td>
-                  <td className="py-2">Manual review</td>
-                </tr>
-                <tr className="border-b">
-                  <td className="py-2">Relationship</td>
-                  <td className="py-2">Direct relationship confidence ≥ 0.85 or indirect reviewed</td>
-                  <td className="py-2">Manual review</td>
-                </tr>
-                <tr className="border-b">
-                  <td className="py-2">Risk</td>
-                  <td className="py-2">Risk Score ≤ 65 and no prohibited-risk flag</td>
-                  <td className="py-2">Hold or manual review</td>
-                </tr>
-                <tr>
-                  <td className="py-2">Liquidity</td>
-                  <td className="py-2">Above configured liquidity threshold</td>
-                  <td className="py-2">Manual review or suppress</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {/* Evidence labels */}
-        <section>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Claim Labels</h2>
-          <p className="text-sm text-gray-600 mb-4">
-            We clearly separate different types of claims so you know what is fact and what is interpretation.
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="card">
-              <h3 className="font-semibold text-green-700">Verified Fact</h3>
-              <p className="mt-1 text-sm text-gray-600">
-                Directly quoted or extracted from a source document with preserved locator.
-              </p>
-            </div>
-            <div className="card">
-              <h3 className="font-semibold text-purple-700">Inference</h3>
-              <p className="mt-1 text-sm text-gray-600">
-                Model or analyst reasoning based on one or more verified facts. Always includes confidence.
-              </p>
-            </div>
-            <div className="card">
-              <h3 className="font-semibold text-amber-700">Estimate</h3>
-              <p className="mt-1 text-sm text-gray-600">
-                Numerical approximation (revenue, cost, timeline) with stated assumptions.
-              </p>
-            </div>
-            <div className="card">
-              <h3 className="font-semibold text-gray-700">Assumption</h3>
-              <p className="mt-1 text-sm text-gray-600">
-                Explicit premise that underlies an inference or estimate.
-              </p>
-            </div>
-          </div>
-        </section>
-
         {/* Limitations */}
         <section className="card border-amber-200 bg-amber-50">
-          <h2 className="text-xl font-semibold text-gray-900 mb-3">Limitations & Disclaimers</h2>
+          <h2 className="mb-3 text-xl font-semibold text-gray-900">Limitations & Disclaimers</h2>
           <ul className="list-inside list-disc space-y-2 text-sm text-gray-700">
             <li>Hidden Catalyst is informational research, not personalized investment advice.</li>
             <li>We do not guarantee that any catalyst will result in a specific price movement.</li>
-            <li>Scores represent relative research priority, not buy/sell recommendations.</li>
+            <li>Thesis statuses represent research maturity, not buy/sell recommendations.</li>
             <li>All data comes from public sources; we do not acquire or encourage material non-public information.</li>
             <li>Past catalyst outcomes do not predict future results.</li>
             <li>Low-liquidity and micro-cap securities carry additional risks.</li>
