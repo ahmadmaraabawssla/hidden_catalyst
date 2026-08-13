@@ -165,7 +165,8 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
   const hasSignal = input.signals.length > 0;
   const hasAmount = extractAmounts(input).length > 0;
   const definedVariable = hasDefinedPriceVariable(combined);
-  const hasMaterialityDenominator = input.materiality.denominator != null && input.materiality.ratio != null;
+  const hasMaterialityDenominator = input.materiality.denominator != null;
+  const hasMaterialityRatio = input.materiality.ratio != null;
 
   return [
     {
@@ -204,10 +205,14 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
     },
     {
       id: 'materiality_denominator',
-      status: hasMaterialityDenominator ? 'verified' : 'pending',
+      status: hasMaterialityRatio ? 'verified' : hasMaterialityDenominator ? 'partial' : 'pending',
       source: 'Financial statements / market data',
       check: 'Materiality denominator checked',
-      result: hasMaterialityDenominator ? input.materiality.explanation : 'Cash, revenue, assets, EV, market cap, or share denominator missing',
+      result: hasMaterialityRatio
+        ? input.materiality.explanation
+        : hasMaterialityDenominator
+          ? 'Denominator present (revenue/cash/assets/EV), but event amount (market opportunity) still needs extraction'
+          : 'Cash, revenue, assets, EV, market cap, or share denominator missing',
       why: 'A dollar amount is only material relative to company scale.',
     },
     {
@@ -260,7 +265,7 @@ function statusFromReport(args: {
   const reasons: string[] = [];
   if (!args.hasPrimaryEvidence) reasons.push('No primary public evidence linked.');
   if (!args.hasThesis) reasons.push('No thesis identified.');
-  if (args.materiality.ratio == null) reasons.push('Materiality denominator missing.');
+  if (args.materiality.ratio == null) reasons.push(args.materiality.denominator != null ? 'Event amount (market opportunity) missing.' : 'Materiality denominator missing.');
   if (args.relationshipConfidence < 70) reasons.push('Relationship confidence below threshold.');
   if (args.completeness < 60) reasons.push('Research completeness below candidate threshold.');
   if (args.adversarial.fatalContradiction) reasons.push('Fatal contradiction detected.');
@@ -302,7 +307,9 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     unverifiedClaims.push({
       status: 'unverified',
       text: 'Financial materiality is quantified.',
-      reason: 'Materiality denominator is missing.',
+      reason: input.materiality.denominator != null
+        ? 'Event amount (market opportunity / contract value) is missing, so no ratio can be computed.'
+        : 'Materiality denominator is missing.',
     });
   }
   if (!input.attentionAvailable) {
