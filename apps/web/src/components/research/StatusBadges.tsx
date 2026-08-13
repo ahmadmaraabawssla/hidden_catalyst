@@ -59,14 +59,20 @@ export function LevelBadge({ level }: { level: string | null | undefined }) {
   );
 }
 
-export function MeasuredTag({ measured }: { measured: boolean | null | undefined }) {
-  return measured ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Measured
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Proxy / Estimate
+export function MeasuredTag({ measured, label }: { measured: boolean | null | undefined; label?: string }) {
+  const base = 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium';
+  if (measured) {
+    return (
+      <span className={`${base} bg-emerald-50 text-emerald-700`}>
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        {label ? `${label} · measured` : 'Measured'}
+      </span>
+    );
+  }
+  return (
+    <span className={`${base} bg-amber-50 text-amber-700`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+      {label ? `${label} · proxy` : 'Proxy / Estimate'}
     </span>
   );
 }

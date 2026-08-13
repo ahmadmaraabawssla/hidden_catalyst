@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import { getEngineOpportunity } from '@/lib/engine-data';
 import { ThesisStatusBadge, CheckStatusBadge, LevelBadge, MeasuredTag } from '@/components/research/StatusBadges';
-import { formatMC, formatPrice, formatPct, formatDate, formatMoney } from '@/components/research/format';
+import { formatMC, formatPrice, formatPct, formatDate, formatMoney, cleanCompanyName, formatRatio } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,7 +50,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
       <div className="mb-6">
         <div className="flex flex-wrap items-center gap-2.5">
           <h1 className="text-xl font-bold tracking-tight text-gray-900 sm:text-2xl">
-            {opp.companyName}
+            {cleanCompanyName(opp.companyName)}
           </h1>
           <span className="font-mono text-lg text-gray-500">{opp.ticker}</span>
           <span className="text-sm text-gray-400">{opp.exchange}</span>
@@ -230,7 +230,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
               {mat.ratio != null && (
                 <div className="flex justify-between">
                   <span className="text-gray-500">Ratio</span>
-                  <span className="font-mono text-gray-800">{(mat.ratio * 100).toFixed(1)}%</span>
+                  <span className="font-mono text-gray-800">{formatRatio(mat.ratio)}</span>
                 </div>
               )}
               <p className="pt-2 text-xs text-gray-500">{mat.explanation}</p>

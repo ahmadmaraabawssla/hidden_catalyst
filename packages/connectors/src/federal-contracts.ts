@@ -67,14 +67,19 @@ export class FederalContractsConnector extends BaseConnector {
           const desc = award?.Description || award?.description || award?.award_description || 'Federal contract award';
           const awardId = award?.generated_internal_id || award?.['Award ID'] || award?.award_id || '';
 
+          // Use the award's actual recipient name, not the searched company, so
+          // title and entity stay consistent when USASpending's fuzzy search
+          // cross-matches a different recipient (e.g. BALL Corp search → BAE award).
+          const recipient = award?.['Recipient Name'] || company.displayName;
+
           if (amount < 100000) continue; // Filter noise
 
           results.push({
             canonicalUrl: `https://www.usaspending.gov/award/${awardId}`,
-            title: `Federal Contract: ${agency} — ${company.displayName}`.slice(0, 200),
-            text: `${agency} awarded contract to ${company.displayName}. Amount: $${(amount / 1e6).toFixed(1)}M. ${desc}`.slice(0, 500),
+            title: `Federal Contract: ${agency} — ${recipient}`.slice(0, 200),
+            text: `${agency} awarded contract to ${recipient}. Amount: $${(amount / 1e6).toFixed(1)}M. ${desc}`.slice(0, 500),
             publishedAt: award?.action_date ? new Date(award.action_date) : award?.['Start Date'] ? new Date(award['Start Date']) : new Date(),
-            metadata: { agency, amount, obligations, ceiling, awardId, recipient: award?.['Recipient Name'] || company.displayName, period: award?.period_of_performance || { start: award?.['Start Date'], end: award?.['End Date'] }, amendment: award?.modification_number },
+            metadata: { agency, amount, obligations, ceiling, awardId, recipient, period: award?.period_of_performance || { start: award?.['Start Date'], end: award?.['End Date'] }, amendment: award?.modification_number },
           });
         }
       } catch {}

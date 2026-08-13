@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { getEngineOpportunities } from '@/lib/engine-data';
 import { ThesisStatusBadge, LevelBadge, MeasuredTag } from '@/components/research/StatusBadges';
-import { formatMC, formatPrice, formatDate } from '@/components/research/format';
+import { formatMC, formatPrice, formatDate, cleanCompanyName, formatRatio } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -123,7 +123,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                   {/* Left: company + title */}
                   <div className="min-w-0 flex-1">
                     <div className="mb-1 flex flex-wrap items-center gap-2 text-sm">
-                      <span className="font-semibold text-gray-900">{opp.companyName}</span>
+                      <span className="font-semibold text-gray-900">{cleanCompanyName(opp.companyName)}</span>
                       <span className="font-mono text-xs text-gray-500">{opp.ticker}</span>
                       <span className="text-xs text-gray-400">{opp.exchange}</span>
                       {opp.latestPrice != null && (
@@ -142,8 +142,8 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                     <div className="mt-2.5 flex flex-wrap items-center gap-2">
                       <ThesisStatusBadge status={opp.verificationStatus} />
                       {mat && <LevelBadge level={mat.level} />}
-                      {attention && <MeasuredTag measured={attention.measured} />}
-                      {priceReaction && <MeasuredTag measured={priceReaction.measured} />}
+                      {attention && <MeasuredTag measured={attention.measured} label="Attention" />}
+                      {priceReaction && <MeasuredTag measured={priceReaction.measured} label="Price" />}
                       {opp.clusterType && (
                         <span className="inline-flex items-center rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
                           {opp.clusterType.replace(/_/g, ' ')}
@@ -166,7 +166,9 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                 {mat && mat.level !== 'UNKNOWN' && (
                   <p className="mt-2 border-t border-gray-100 pt-2 text-xs text-gray-500">
                     <span className="font-medium text-gray-600">Materiality:</span>{' '}
-                    {mat.explanation}
+                    {mat.metric}
+                    {mat.ratio != null && <span className="font-mono"> · {formatRatio(mat.ratio)}</span>}
+                    <span> — {mat.level.toLowerCase()}</span>
                   </p>
                 )}
 
