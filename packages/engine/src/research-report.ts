@@ -262,9 +262,16 @@ function completenessFromChecks(checks: ResearchCheck[]) {
     partial: 0.5,
     pending: 0,
     failed: 0,
-    not_applicable: 1,
+    not_applicable: 0,
   };
-  const score = checks.reduce((sum, check) => sum + weights[check.status], 0) / Math.max(1, checks.length);
+  // Exclude not-applicable checks from BOTH the numerator and denominator so
+  // they neither grant free credit nor penalize the score. A catalyst type
+  // that doesn't need a given check shouldn't be rewarded (old behavior) or
+  // punished (naive zero-weight) for it — completeness is measured only over
+  // the checks that actually apply.
+  const applicable = checks.filter((check) => check.status !== 'not_applicable');
+  if (applicable.length === 0) return 0;
+  const score = applicable.reduce((sum, check) => sum + weights[check.status], 0) / applicable.length;
   return Math.round(score * 100);
 }
 
