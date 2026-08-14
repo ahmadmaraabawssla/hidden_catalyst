@@ -258,6 +258,20 @@ function normalizedEntityKey(entities: unknown) {
     .replace(/[^a-z0-9]/g, '');
 }
 
+/**
+ * Two events are the "same" catalyst only if they are close in time. Without
+ * this guard, a 1993 NASA contract and a 2019 NASA contract to the same
+ * recipient are merged into one cluster (both share the company entity key),
+ * producing a nonsensical multi-decade "opportunity". Signals further apart
+ * than CLUSTER_MERGE_WINDOW_MS are treated as distinct events.
+ */
+const CLUSTER_MERGE_WINDOW_MS = 180 * 86400000; // 180 days
+
+function eventsAreContemporaneous(a: Date, b: Date): boolean {
+  const diff = Math.abs(a.getTime() - b.getTime());
+  return diff <= CLUSTER_MERGE_WINDOW_MS;
+}
+
 export async function storeNormalizedSignal(sourceId: string, signal: NormalizedSignal, documentId?: string) {
   const priority = calculateResearchPriority(buildResearchPriorityInput(signal));
 
@@ -322,7 +336,10 @@ export async function createCatalystClusterFromSignal(signalId: string) {
     take: 25,
   });
   const existing = entityKey
-    ? candidates.find((cluster) => cluster.signals.some(({ signal: linked }) => normalizedEntityKey(linked.entities) === entityKey))
+    ? candidates.find((cluster) => cluster.signals.some(({ signal: linked }) =>
+        normalizedEntityKey(linked.entities) === entityKey &&
+        eventsAreContemporaneous(linked.publishedAt, signal.publishedAt)
+      ))
     : null;
 
   if (existing) {
@@ -572,6 +589,7 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     assets: companyContext.assets,
     enterpriseValue: companyContext.enterpriseValue,
     currentShares: companyContext.currentShares,
+    eventDate: primary?.publishedAt ?? null,
   });
   const adversarial = runDeterministicAdversarialCheck({
     eventType: cluster.clusterType,

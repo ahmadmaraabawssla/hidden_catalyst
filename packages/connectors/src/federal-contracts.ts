@@ -31,6 +31,16 @@ export class FederalContractsConnector extends BaseConnector {
     if (companies.length === 0) return [];
     const results: RawDocument[] = [];
 
+    // Freshness window: a federal contract is a "fresh" catalyst only if its
+    // record was modified recently. USASpending's `Action Date` is null for
+    // aggregated prime awards, but `Last Modified Date` is populated and reflects
+    // when the award record actually changed (e.g. an amendment). We enforce the
+    // window on `Last Modified Date`, not the period-of-performance start date.
+    const scanWindowMs = 45 * 86400000; // 45 days — slightly wider than the API filter for safety
+    const cutoff = (since || new Date(Date.now() - scanWindowMs)).getTime();
+    const now = Date.now();
+    const scanStart = (since || new Date(Date.now() - 30 * 86400000)).toISOString().slice(0, 10);
+
     for (const company of companies) {
       try {
         // USASpending.gov — free, no key, searches federal awards by recipient
@@ -42,12 +52,12 @@ export class FederalContractsConnector extends BaseConnector {
             filters: {
               recipient_search_text: [company.displayName.slice(0, 80)],
               time_period: [{
-                start_date: (since || new Date(Date.now() - 30 * 86400000)).toISOString().slice(0, 10),
+                start_date: scanStart,
                 end_date: new Date().toISOString().slice(0, 10),
               }],
               award_type_codes: ['A', 'B', 'C', 'D'],
             },
-            fields: ['Award ID', 'Recipient Name', 'Award Amount', 'Total Obligation', 'Awarding Agency', 'Description', 'Start Date', 'End Date'],
+            fields: ['Award ID', 'Recipient Name', 'Award Amount', 'Total Obligation', 'Awarding Agency', 'Description', 'Start Date', 'End Date', 'Action Date', 'Last Modified Date'],
             page: 1,
             limit: 5,
             subawards: false,
@@ -74,12 +84,34 @@ export class FederalContractsConnector extends BaseConnector {
 
           if (amount < 100000) continue; // Filter noise
 
+          // ── Freshness guard: drop awards whose record was not modified recently ──
+          // The period-of-performance `Start Date` is the award's original start
+          // (often decades ago) and is kept as the event date so materiality can
+          // flag stale denominators. Recency is judged by `Last Modified Date`,
+          // which is the only reliable "did this just change" signal the endpoint
+          // provides. Drop when the modified date is missing, older than the
+          // window, or in the future (malformed).
+          const lastModifiedRaw = award?.['Last Modified Date'] ?? award?.last_modified_date;
+          const lastModifiedMs = lastModifiedRaw ? new Date(lastModifiedRaw).getTime() : NaN;
+          if (!Number.isFinite(lastModifiedMs) || lastModifiedMs < cutoff || lastModifiedMs > now) continue;
+
+          // Event date = period-of-performance start (honest "when the contract
+          // began"); falls back to the modification date if no start date.
+          const startRaw = award?.['Start Date'];
+          const startMs = startRaw ? new Date(startRaw).getTime() : NaN;
+          const publishedAt = Number.isFinite(startMs) ? new Date(startMs) : new Date(lastModifiedMs);
+
           results.push({
             canonicalUrl: `https://www.usaspending.gov/award/${awardId}`,
             title: `Federal Contract: ${agency} — ${recipient}`.slice(0, 200),
             text: `${agency} awarded contract to ${recipient}. Amount: $${(amount / 1e6).toFixed(1)}M. ${desc}`.slice(0, 500),
-            publishedAt: award?.action_date ? new Date(award.action_date) : award?.['Start Date'] ? new Date(award['Start Date']) : new Date(),
-            metadata: { agency, amount, obligations, ceiling, awardId, recipient, period: award?.period_of_performance || { start: award?.['Start Date'], end: award?.['End Date'] }, amendment: award?.modification_number },
+            publishedAt,
+            metadata: {
+              agency, amount, obligations, ceiling, awardId, recipient,
+              period: award?.period_of_performance || { start: award?.['Start Date'], end: award?.['End Date'] },
+              amendment: award?.modification_number,
+              lastModifiedDate: lastModifiedRaw || null,
+            },
           });
         }
       } catch {}

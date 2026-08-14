@@ -29,6 +29,35 @@ describe('computeMateriality', () => {
     expect(result.metric).toBe('liability / cash');
     expect(result.level).toBe('EXTREME');
   });
+
+  it('downgrades stale events to UNKNOWN when the denominator is not contemporaneous', () => {
+    // A 1993 contract amount compared against "today's" revenue would produce a
+    // misleading HIGH/MODERATE. It must be flagged UNKNOWN.
+    const result = computeMateriality({
+      eventType: 'contract_award',
+      amount: 22_000_000_000,
+      revenue: 89_000_000_000,
+      eventDate: new Date('1993-11-15T00:00:00Z'),
+      denominatorAsOf: new Date('2026-08-14T00:00:00Z'),
+    });
+
+    expect(result.level).toBe('UNKNOWN');
+    expect(result.ratio).toBeNull();
+    expect(result.explanation).toContain('contemporaneous');
+  });
+
+  it('keeps recent events classified normally', () => {
+    const result = computeMateriality({
+      eventType: 'contract_award',
+      amount: 25_000_000,
+      revenue: 100_000_000,
+      eventDate: new Date('2026-08-01T00:00:00Z'),
+      denominatorAsOf: new Date('2026-08-14T00:00:00Z'),
+    });
+
+    expect(result.level).toBe('HIGH');
+    expect(result.ratio).toBeCloseTo(0.25);
+  });
 });
 
 describe('calculatePriceReactionWindows', () => {
