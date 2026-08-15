@@ -124,9 +124,21 @@ export function plainMateriality(level: string | null | undefined): { label: str
       return { label: 'Meaningful', tone: 'This is noticeable, but not transformative.' };
     case 'LOW':
       return { label: 'Small', tone: 'This is minor relative to the company\'s size.' };
+    case 'IMMATERIAL':
+      return { label: 'Negligible', tone: 'This is economically negligible — it won\'t move the needle for this company.' };
     case 'UNKNOWN':
       return { label: 'Unclear', tone: 'We couldn\'t size this up yet.' };
     default:
       return { label: '—', tone: '' };
   }
+}
+
+/** Discovery delay: days between the source publishing and us first seeing it. */
+export function discoveryDelayDays(eventDate: string | null | undefined, detectedAt: string | null | undefined): number | null {
+  if (!eventDate || !detectedAt) return null;
+  const e = new Date(eventDate);
+  const d = new Date(detectedAt);
+  if (Number.isNaN(e.getTime()) || Number.isNaN(d.getTime())) return null;
+  const days = (d.getTime() - e.getTime()) / 86400000;
+  return days >= 0 ? Math.round(days) : null;
 }

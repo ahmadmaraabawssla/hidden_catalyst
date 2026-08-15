@@ -653,7 +653,7 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     primaryEvidenceExists: !!primary,
     hiddenAngleExists: !!cluster.thesis || !!primary?.title,
     relationshipConfidence: deepResearch.relationshipConfidence,
-    materialityScore: materiality.level === 'UNKNOWN' ? 40 : materiality.level === 'LOW' ? 35 : materiality.level === 'MODERATE' ? 60 : 85,
+    materialityScore: materiality.level === 'UNKNOWN' ? 40 : materiality.level === 'IMMATERIAL' ? 10 : materiality.level === 'LOW' ? 35 : materiality.level === 'MODERATE' ? 60 : 85,
     liquidityAcceptable: true,
     dataFreshnessScore: primary ? 80 : 30,
     fatalContradiction: adversarial.fatalContradiction,
@@ -729,6 +729,9 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
       : researchReport.thesisStatus === 'verified'
         ? 'published'
         : 'candidate';
+    // Map engine thesis status ('reject') to the DB's user-facing value
+    // ('rejected') — the verification_status column only allows 'rejected'.
+    const verificationStatus = researchReport.thesisStatus === 'reject' ? 'rejected' : researchReport.thesisStatus;
     const existing = await prisma.opportunity.findFirst({ where: { clusterId, securityId: security.id } });
     const data = {
       securityId: security.id,
@@ -736,7 +739,7 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
       title: cluster.title,
       summary: researchReport.summary,
       status: opportunityStatus,
-      verificationStatus: researchReport.thesisStatus,
+      verificationStatus,
       confidence: researchReport.confidence,
       researchCompleteness: researchReport.completeness,
       engineVersion: 'source-agnostic-v2',

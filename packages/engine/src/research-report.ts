@@ -291,13 +291,23 @@ function statusFromReport(args: {
   if (args.completeness < 60) reasons.push('Research completeness below candidate threshold.');
   if (args.adversarial.fatalContradiction) reasons.push('Fatal contradiction detected.');
 
+  // ── HARD materiality gate ──
+  // A real-but-negligible event (e.g. a $2M contract at a $44B-revenue company)
+  // is NOT information asymmetry — it is the efficient-market response to an
+  // irrelevant record. Reject it outright rather than labeling it "candidate"
+  // or "promising". This is the single most important filter in the product.
+  if (args.materiality.level === 'IMMATERIAL') {
+    reasons.push(`Economically immaterial — ${args.materiality.metric} is ${(args.materiality.ratio! * 100).toExponential(1)}%, below the 0.25% relevance floor.`);
+    return { status: 'reject' as ThesisStatus, reasons };
+  }
+
   if (!args.hasPrimaryEvidence || args.adversarial.fatalContradiction) {
     return { status: 'reject' as ThesisStatus, reasons };
   }
   if (!args.hasThesis || args.materiality.ratio == null || args.completeness < 60) {
     return { status: 'watch' as ThesisStatus, reasons };
   }
-  if (args.completeness >= 85 && args.materiality.level !== 'LOW' && args.relationshipConfidence >= 85 && args.adversarial.confidencePenalty < 20) {
+  if (args.completeness >= 85 && args.materiality.level !== 'LOW' && args.materiality.level !== 'IMMATERIAL' && args.relationshipConfidence >= 85 && args.adversarial.confidencePenalty < 20) {
     return { status: 'verified' as ThesisStatus, reasons };
   }
   return { status: 'candidate' as ThesisStatus, reasons };

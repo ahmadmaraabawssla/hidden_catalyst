@@ -5,6 +5,7 @@
  */
 
 import { BaseConnector, type RawDocument, type ExtractionResult } from './base';
+import { computeIgnoredScore } from '@hidden-catalyst/domain';
 import type { PrismaClient } from '@hidden-catalyst/db';
 
 const USASPENDING_BASE = 'https://api.usaspending.gov/api/v2';
@@ -22,13 +23,54 @@ export class FederalContractsConnector extends BaseConnector {
   }
 
   async fetchDocuments(since?: Date): Promise<RawDocument[]> {
-    const companies = await this.prisma.company.findMany({
-      where: { cik: { not: null } },
-      select: { displayName: true },
-      take: 100,
+    const maxCompanies = Number(process.env.CONTRACT_COMPANY_LIMIT || 100);
+    const maxCap = Number(process.env.DISCOVERY_MAX_MARKET_CAP || 20_000_000_000);
+
+    // ── Underfollowed-company selection ──
+    // A $2M contract at a $188B company is NOT a hidden catalyst. Only discover
+    // contracts for companies that are actually underfollowed: below the market
+    // cap ceiling AND ranked by ignored-score (news + dollar volume + cap).
+    // This replaces the old "first 100 companies with a CIK" behavior which
+    // surfaced mega-caps like Abbott/Caterpillar/ADM as if they were obscure.
+    const universe = await this.prisma.company.findMany({
+      where: {
+        cik: { not: null },
+        securities: {
+          some: {
+            active: true,
+            exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] },
+            marketCap: { lte: maxCap },
+          },
+        },
+      },
+      select: {
+        displayName: true,
+        securities: {
+          where: { active: true },
+          select: { ticker: true, marketCap: true, avgDollarVolume: true, attributes: true },
+          take: 1,
+        },
+      },
     });
 
-    if (companies.length === 0) return [];
+    const ranked = universe
+      .map((company) => {
+        const sec = company.securities[0];
+        const attrs = (sec?.attributes ?? {}) as Record<string, unknown>;
+        return {
+          company,
+          score: computeIgnoredScore({
+            news7d: toNumber(attrs.news_7d),
+            avgDollarVolume: sec?.avgDollarVolume ?? toNumber(attrs.avg_dollar_volume),
+            marketCap: sec?.marketCap ?? toNumber(attrs.market_cap),
+          }),
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxCompanies)
+      .map((r) => r.company);
+
+    if (ranked.length === 0) return [];
     const results: RawDocument[] = [];
 
     // Freshness window: a federal contract is a "fresh" catalyst only if its
@@ -41,7 +83,7 @@ export class FederalContractsConnector extends BaseConnector {
     const now = Date.now();
     const scanStart = (since || new Date(Date.now() - 30 * 86400000)).toISOString().slice(0, 10);
 
-    for (const company of companies) {
+    for (const company of ranked) {
       try {
         // USASpending.gov — free, no key, searches federal awards by recipient
         const url = `${USASPENDING_BASE}/search/spending_by_award/`;
@@ -57,7 +99,7 @@ export class FederalContractsConnector extends BaseConnector {
               }],
               award_type_codes: ['A', 'B', 'C', 'D'],
             },
-            fields: ['Award ID', 'Recipient Name', 'Award Amount', 'Total Obligation', 'Awarding Agency', 'Description', 'Start Date', 'End Date', 'Action Date', 'Last Modified Date'],
+            fields: ['Award ID', 'Recipient Name', 'Award Amount', 'Total Obligation', 'potential_total_value_of_award', 'Awarding Agency', 'Description', 'Start Date', 'End Date', 'Action Date', 'Last Modified Date'],
             page: 1,
             limit: 5,
             subawards: false,
@@ -70,9 +112,20 @@ export class FederalContractsConnector extends BaseConnector {
         const awards = data?.results || [];
 
         for (const award of awards) {
-          const amount = award?.['Award Amount'] || award?.award_amount || award?.['Total Obligation'] || award?.total_obligation || 0;
-          const obligations = award?.['Total Obligation'] || award?.total_obligation || award?.obligated_amount || null;
-          const ceiling = award?.potential_total_value_of_award || award?.['Award Amount'] || award?.award_amount || null;
+          // ── Obligated vs ceiling ──
+          // "Total Obligation" is what's actually committed/spent. "potential_
+          // total_value_of_award" (or "Award Amount" for IDIQs) is the ceiling —
+          // NOT guaranteed revenue. Materiality must use the OBLIGATED amount, or
+          // an immaterial-looking ceiling will be overstated as real dollars.
+          const obligatedRaw = award?.['Total Obligation'] ?? award?.total_obligation ?? award?.obligated_amount ?? null;
+          const ceilingRaw = award?.potential_total_value_of_award ?? award?.['Award Amount'] ?? award?.award_amount ?? null;
+          const obligated = Number(obligatedRaw || 0) || null;
+          const ceiling = Number(ceilingRaw || 0) || null;
+          // Conservative primary: prefer obligated; fall back to the award amount
+          // (ceiling) only when obligation is unavailable, and flag the ambiguity.
+          const amount = obligated ?? ceiling ?? 0;
+          const amountIsCeiling = obligated == null && ceiling != null;
+
           const agency = award?.['Awarding Agency'] || award?.awarding_agency_name || award?.awarding_agency?.toptier_agency?.name || 'Federal Agency';
           const desc = award?.Description || award?.description || award?.award_description || 'Federal contract award';
           const awardId = award?.generated_internal_id || award?.['Award ID'] || award?.award_id || '';
@@ -104,10 +157,11 @@ export class FederalContractsConnector extends BaseConnector {
           results.push({
             canonicalUrl: `https://www.usaspending.gov/award/${awardId}`,
             title: `Federal Contract: ${agency} — ${recipient}`.slice(0, 200),
-            text: `${agency} awarded contract to ${recipient}. Amount: $${(amount / 1e6).toFixed(1)}M. ${desc}`.slice(0, 500),
+            text: `${agency} awarded contract to ${recipient}. Obligated: $${(amount / 1e6).toFixed(1)}M${ceiling != null && ceiling !== amount ? ` (ceiling $${(ceiling / 1e6).toFixed(1)}M)` : ''}. ${desc}`.slice(0, 500),
             publishedAt,
             metadata: {
-              agency, amount, obligations, ceiling, awardId, recipient,
+              agency, amount, obligated, ceiling, awardId, recipient,
+              amountIsCeiling,
               period: award?.period_of_performance || { start: award?.['Start Date'], end: award?.['End Date'] },
               amendment: award?.modification_number,
               lastModifiedDate: lastModifiedRaw || null,
@@ -170,4 +224,10 @@ export class FederalContractsConnector extends BaseConnector {
 
     return result;
   }
+}
+
+function toNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }

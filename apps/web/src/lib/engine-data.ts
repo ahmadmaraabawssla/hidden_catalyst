@@ -114,6 +114,10 @@ export interface SignalSource {
   publishedAt: string;
   sourceUrl: string;
   role: string;
+  externalId: string;
+  amount: number | null;
+  ceiling: number | null;
+  amountIsCeiling: boolean;
 }
 
 export interface OpportunityResearch {
@@ -123,6 +127,7 @@ export interface OpportunityResearch {
   status: string;
   verificationStatus: string;
   detectedAt: string;
+  eventDate: string | null;
   publishedAt: string | null;
   confidence: number | null;
   researchCompleteness: number | null;
@@ -281,6 +286,7 @@ function mapOpportunity(row: Record<string, unknown>): OpportunityResearch {
     status: asString(row.status),
     verificationStatus: asString(row.verification_status),
     detectedAt: asString(row.detected_at),
+    eventDate: row.event_date != null ? asString(row.event_date) : null,
     publishedAt: row.published_at != null ? asString(row.published_at) : null,
     confidence: asNumber(row.confidence),
     researchCompleteness: asNumber(row.research_completeness),
@@ -326,7 +332,8 @@ const OPPORTUNITY_SELECT = `
   cl.cluster_type, cl.status AS cluster_status, cl.thesis AS cluster_thesis, cl.priority_score,
   cl.materiality_json, cl.attention_json, cl.price_reaction_json, cl.adversarial_json,
   cl.structured_attributes -> 'researchReport' AS report_json,
-  cl.structured_attributes -> 'lastUpgrade' AS last_upgrade
+  cl.structured_attributes -> 'lastUpgrade' AS last_upgrade,
+  (SELECT MIN(sg.published_at) FROM catalyst_cluster_signals csg JOIN signals sg ON sg.id = csg.signal_id WHERE csg.cluster_id = cl.id) AS event_date
 `;
 
 const OPPORTUNITY_JOIN = `
@@ -390,7 +397,8 @@ export async function getEngineOpportunity(id: string): Promise<OpportunityResea
 
     // Load linked signals
     const sigRes = await client.query(
-      `SELECT s.id, s.title, s.source_type, s.event_type, s.published_at, s.source_url, cs.role
+      `SELECT s.id, s.title, s.source_type, s.event_type, s.published_at, s.source_url, cs.role,
+              s.external_id, s.raw_metadata
        FROM catalyst_cluster_signals cs
        JOIN signals s ON s.id = cs.signal_id
        WHERE cs.cluster_id = (SELECT cluster_id FROM opportunities WHERE id = $1)
@@ -398,15 +406,22 @@ export async function getEngineOpportunity(id: string): Promise<OpportunityResea
        LIMIT 10`,
       [id]
     );
-    opp.signals = sigRes.rows.map((r) => ({
-      id: asString(r.id),
-      title: asString(r.title),
-      sourceType: asString(r.source_type),
-      eventType: r.event_type != null ? asString(r.event_type) : null,
-      publishedAt: asString(r.published_at),
-      sourceUrl: asString(r.source_url),
-      role: asString(r.role),
-    }));
+    opp.signals = sigRes.rows.map((r) => {
+      const meta = jsonOrNull<Record<string, unknown>>(r.raw_metadata);
+      return {
+        id: asString(r.id),
+        title: asString(r.title),
+        sourceType: asString(r.source_type),
+        eventType: r.event_type != null ? asString(r.event_type) : null,
+        publishedAt: asString(r.published_at),
+        sourceUrl: asString(r.source_url),
+        role: asString(r.role),
+        externalId: asString(r.external_id),
+        amount: asNumber(meta?.amount),
+        ceiling: asNumber(meta?.ceiling),
+        amountIsCeiling: asBool(meta?.amountIsCeiling),
+      };
+    });
     return opp;
   } finally {
     await client.end().catch(() => undefined);

@@ -1,4 +1,12 @@
-export type MaterialityLevel = 'LOW' | 'MODERATE' | 'HIGH' | 'EXTREME' | 'UNKNOWN';
+export type MaterialityLevel = 'IMMATERIAL' | 'LOW' | 'MODERATE' | 'HIGH' | 'EXTREME' | 'UNKNOWN';
+
+/**
+ * Below this ratio an event is economically negligible — no coverage is the
+ * efficient-market response to an irrelevant record, NOT information asymmetry.
+ * A $2M contract at a $44B-revenue company (~0.0045%) must never surface as
+ * "worth a look". This is the hard floor for investment relevance.
+ */
+export const IMMATERIAL_RATIO = 0.0025; // 0.25%
 
 export interface MaterialityInput {
   eventType: string;
@@ -40,7 +48,8 @@ function classifyRatio(ratio: number | null): MaterialityLevel {
   if (ratio >= 0.50) return 'EXTREME';
   if (ratio >= 0.20) return 'HIGH';
   if (ratio >= 0.05) return 'MODERATE';
-  return 'LOW';
+  if (ratio >= IMMATERIAL_RATIO) return 'LOW';
+  return 'IMMATERIAL';
 }
 
 function pct(value: number | null) {
@@ -107,4 +116,9 @@ export function computeMateriality(input: MaterialityInput): MaterialityResult {
 export function extractLargestAmount(amounts: Array<{ value?: number | null }> | null | undefined): number | null {
   const values = (amounts || []).map((a) => Number(a.value || 0)).filter((v) => v > 0);
   return values.length ? Math.max(...values) : null;
+}
+
+/** True when the event clears the hard investment-relevance floor. */
+export function isInvestmentRelevant(level: MaterialityLevel): boolean {
+  return level === 'LOW' || level === 'MODERATE' || level === 'HIGH' || level === 'EXTREME';
 }

@@ -28,6 +28,7 @@ export class SECEdgarConnector extends BaseConnector {
     const maxCompanies = Number(process.env.SEC_SCAN_LIMIT || 500);
     const minIgnoredScore = Number(process.env.SCAN_MIN_IGNORED_SCORE || 0);
     const minMarketCap = Number(process.env.SEC_MIN_MARKET_CAP || 10_000_000);
+    const maxMarketCap = Number(process.env.DISCOVERY_MAX_MARKET_CAP || 20_000_000_000);
     const detectLimit = Number(process.env.SEC_DETECT_LIMIT || 8000);
 
     // ── Two-stage: DETECT first (cheap), then SCORE only the shortlist ──
@@ -43,7 +44,7 @@ export class SECEdgarConnector extends BaseConnector {
           some: {
             active: true,
             exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] },
-            marketCap: { gte: minMarketCap },
+            marketCap: { gte: minMarketCap, lte: maxMarketCap },
           },
         },
       },

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getEngineOpportunities, getLastEngineRun } from '@/lib/engine-data';
-import { formatMC, formatPrice, cleanCompanyName, formatRatio, relativeTime, plainThesis, plainMateriality, isStale } from '@/components/research/format';
+import { formatMC, formatPrice, cleanCompanyName, formatRatio, relativeTime, plainThesis, plainMateriality, isStale, discoveryDelayDays } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -80,6 +80,8 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
             const priceReaction = opp.priceReaction;
             const completeness = opp.researchCompleteness ?? opp.report?.completeness ?? 0;
             const facts = opp.report?.verifiedFacts.length ?? 0;
+            const delayDays = discoveryDelayDays(opp.eventDate, opp.detectedAt);
+            const backfilled = delayDays != null && delayDays > 7;
 
             return (
               <Link
@@ -95,7 +97,8 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                     <span className="text-xs text-gray-500">{formatMC(opp.marketCap)}</span>
                   )}
                   <span className="ml-auto text-xs text-gray-400">
-                    {isStale(opp.detectedAt, opp.clusterType) ? 'older' : 'detected'} {relativeTime(opp.detectedAt)}
+                    {backfilled ? 'Backfilled' : 'detected'} {relativeTime(opp.detectedAt)}
+                    {backfilled && delayDays != null && <span> · found {delayDays} days after the event</span>}
                   </span>
                 </div>
 
@@ -145,7 +148,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                 )}
 
                 <div className="mt-2 flex items-center gap-3 text-[11px] text-gray-400">
-                  <span>How sure are we: {completeness}%</span>
+                  <span>Researched: {completeness}%</span>
                   {facts > 0 && <span>· {facts} facts checked</span>}
                 </div>
               </Link>

@@ -92,6 +92,19 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
           <span className="text-xs text-gray-400">detected {relativeTime(opp.detectedAt)}</span>
         </div>
         <p className="mt-3 text-sm text-gray-600">{thesis.meaning}</p>
+        {(report?.qualificationReasons ?? []).length > 0 && (
+          <div className="mt-3 border-t border-gray-100 pt-3">
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-400">Why this verdict</span>
+            <ul className="mt-1.5 space-y-1">
+              {report!.qualificationReasons.map((reason, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-gray-600">
+                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-gray-400" />
+                  {reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {/* ── WHAT HAPPENED ── */}
@@ -180,8 +193,8 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             <h2 className="mb-2 text-base font-semibold text-gray-900">Is anyone paying attention?</h2>
             <p className="text-sm text-gray-700">
               {attention.measured
-                ? `Yes — we found ${attention.news.count} news mentions in the last week. This might already be on people's radar.`
-                : 'No — we found little to no news coverage. This is exactly the kind of thing the market tends to miss.'}
+                ? `Yes — we found ${attention.news.count} news mentions in the last week, so it may already be on people's radar.`
+                : 'Little to none observed. Whether that matters depends on how big this is for the company — low coverage of a negligible event is just the market being efficient.'}
             </p>
           </div>
         )}
@@ -190,8 +203,8 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             <h2 className="mb-2 text-base font-semibold text-gray-900">Has the market reacted?</h2>
             <p className="text-sm text-gray-700">
               {priceReaction.measured
-                ? `The stock moved ${formatPct(priceReaction.returns.eventDay)} on the day. It's ${priceReaction.marketReaction === 'minimal' ? 'barely' : priceReaction.marketReaction === 'moderate' ? 'somewhat' : 'strongly'} priced in.`
-                : 'Not yet — the market hasn\'t had enough time to react. This could mean it\'s still under the radar.'}
+                ? `The stock moved ${formatPct(priceReaction.returns.eventDay)} that day, but we can't attribute that to this specific event — broader market or sector moves could explain it.`
+                : 'Not yet — the market hasn\'t had enough time to react to this.'}
             </p>
           </div>
         )}
@@ -301,8 +314,17 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
                     {signal.sourceType.replace(/_/g, ' ')}
                   </span>
                   <span>{formatDate(signal.publishedAt)}</span>
+                  {signal.amount != null && (
+                    <span className="font-mono">
+                      {formatMoney(signal.amount)}
+                      {signal.amountIsCeiling && ' (ceiling)'}
+                    </span>
+                  )}
                 </div>
                 <p className="mt-1.5 text-sm text-gray-700">{signal.title}</p>
+                {signal.externalId && (
+                  <p className="mt-0.5 truncate font-mono text-[11px] text-gray-400">Award {signal.externalId}</p>
+                )}
               </a>
             ))}
           </div>

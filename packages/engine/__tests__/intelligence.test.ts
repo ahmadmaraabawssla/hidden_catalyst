@@ -58,6 +58,16 @@ describe('computeMateriality', () => {
     expect(result.level).toBe('HIGH');
     expect(result.ratio).toBeCloseTo(0.25);
   });
+
+  it('classifies a negligible event as IMMATERIAL (Abbott $2M / $44B case)', () => {
+    const result = computeMateriality({
+      eventType: 'contract_award',
+      amount: 2_016_396,
+      revenue: 44_300_000_000,
+    });
+    expect(result.level).toBe('IMMATERIAL');
+    expect(result.ratio).toBeLessThan(0.0025);
+  });
 });
 
 describe('calculatePriceReactionWindows', () => {
@@ -133,5 +143,42 @@ describe('buildResearchReport', () => {
     expect(report.unverifiedClaims.some((claim) => claim.text.includes('overlooked'))).toBe(true);
     expect(report.thesisStatus).toBe('watch');
     expect(report.scenarioTables[0].rows.length).toBeGreaterThan(0);
+  });
+
+  it('rejects an economically immaterial event (Abbott-style $2M contract)', () => {
+    const materiality = computeMateriality({
+      eventType: 'contract_award',
+      amount: 2_016_396,
+      revenue: 44_300_000_000,
+    });
+    const adversarial = runDeterministicAdversarialCheck({
+      eventType: 'contract_award',
+      title: 'Federal contract award',
+      thesis: 'A federal contract was awarded.',
+      materialityRatio: materiality.ratio,
+      evidenceQuality: 90,
+      relationshipConfidence: 90,
+    });
+    const report = buildResearchReport({
+      title: 'Federal contract award',
+      eventType: 'contract_award',
+      thesis: 'A federal contract was awarded.',
+      materiality,
+      adversarial,
+      signals: [{
+        title: 'Federal contract award',
+        sourceType: 'federal_contract',
+        rawText: 'Agency awarded a contract to the recipient.',
+        amounts: [{ value: 2_016_396 }],
+        sourceQuality: 90,
+      }],
+      attentionAvailable: true,
+      attentionMeasured: false,
+      priceReactionAvailable: true,
+      priceReactionMeasured: true,
+      relationshipConfidence: 90,
+    });
+    expect(report.thesisStatus).toBe('reject');
+    expect(report.qualificationReasons.some((r) => r.includes('immaterial'))).toBe(true);
   });
 });
