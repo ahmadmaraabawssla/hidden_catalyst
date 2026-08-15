@@ -307,7 +307,7 @@ function statusFromReport(args: {
   if (!args.hasThesis || args.materiality.ratio == null || args.completeness < 60) {
     return { status: 'watch' as ThesisStatus, reasons };
   }
-  if (args.completeness >= 85 && args.materiality.level !== 'LOW' && args.materiality.level !== 'IMMATERIAL' && args.relationshipConfidence >= 85 && args.adversarial.confidencePenalty < 20) {
+  if (args.completeness >= 85 && args.materiality.level !== 'LOW' && args.relationshipConfidence >= 85 && args.adversarial.confidencePenalty < 20) {
     return { status: 'verified' as ThesisStatus, reasons };
   }
   return { status: 'candidate' as ThesisStatus, reasons };
