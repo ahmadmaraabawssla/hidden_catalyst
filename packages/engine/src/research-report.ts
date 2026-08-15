@@ -290,6 +290,7 @@ function statusFromReport(args: {
   completeness: number;
   relationshipConfidence: number;
   llmIsRoutine: boolean;
+  eventType: string;
 }) {
   const reasons: string[] = [];
   if (!args.hasPrimaryEvidence) reasons.push('No primary public evidence linked.');
@@ -317,6 +318,16 @@ function statusFromReport(args: {
   // or "promising". This is the single most important filter in the product.
   if (args.materiality.level === 'IMMATERIAL') {
     reasons.push(`Economically immaterial — ${args.materiality.metric} is ${(args.materiality.ratio! * 100).toExponential(1)}%, below the 0.25% relevance floor.`);
+    return { status: 'reject' as ThesisStatus, reasons };
+  }
+
+  // ── No-economic-mechanism closure ──
+  // A clinical trial / regulatory record with no extracted amount has no
+  // measurable economic link to a listed company — it is routine registry data,
+  // not a catalyst under investigation. Close it out rather than letting it
+  // accumulate in "watch" forever (the previous behavior left 85+ trials stuck).
+  if (/clinical_trial|trial|regulatory/.test(args.eventType) && args.materiality.ratio == null && args.materiality.denominator == null) {
+    reasons.push('Clinical/regulatory record has no measurable economic mechanism — routine registry data.');
     return { status: 'reject' as ThesisStatus, reasons };
   }
 
@@ -409,6 +420,7 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     completeness,
     relationshipConfidence,
     llmIsRoutine,
+    eventType: input.eventType,
   });
   const confidence = clamp(
     35 +

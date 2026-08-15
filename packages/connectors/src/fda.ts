@@ -6,6 +6,7 @@
  */
 
 import { BaseConnector, type RawDocument, type ExtractionResult } from './base';
+import { computeIgnoredScore } from '@hidden-catalyst/domain';
 import type { PrismaClient } from '@hidden-catalyst/db';
 
 const CT_BASE = 'https://clinicaltrials.gov/api/v2/studies';
@@ -108,11 +109,52 @@ export class ClinicalTrialsConnector extends BaseConnector {
   }
 
   async fetchDocuments(since?: Date): Promise<RawDocument[]> {
-    const companies = await this.prisma.company.findMany({
-      where: { cik: { not: null } },
-      select: { displayName: true },
-      take: 100,
+    const maxCompanies = Number(process.env.CONTRACT_COMPANY_LIMIT || 100);
+    const maxCap = Number(process.env.DISCOVERY_MAX_MARKET_CAP || 20_000_000_000);
+
+    // ── Underfollowed-company selection ──
+    // A clinical trial for Pfizer/BMS is NOT a catalyst — it is routine registry
+    // data. Only discover trials for underfollowed companies (below the cap, ranked
+    // by ignored-score), where a single trial can actually move the needle. This
+    // replaces the old "first 100 companies with a CIK" behavior that filled the
+    // queue with large-pharma trials that can never resolve to a catalyst.
+    const universe = await this.prisma.company.findMany({
+      where: {
+        cik: { not: null },
+        securities: {
+          some: {
+            active: true,
+            exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] },
+            marketCap: { lte: maxCap },
+          },
+        },
+      },
+      select: {
+        displayName: true,
+        securities: {
+          where: { active: true },
+          select: { ticker: true, marketCap: true, avgDollarVolume: true, attributes: true },
+          take: 1,
+        },
+      },
     });
+
+    const companies = universe
+      .map((company) => {
+        const sec = company.securities[0];
+        const attrs = (sec?.attributes ?? {}) as Record<string, unknown>;
+        return {
+          company,
+          score: computeIgnoredScore({
+            news7d: toNumber(attrs.news_7d),
+            avgDollarVolume: sec?.avgDollarVolume ?? toNumber(attrs.avg_dollar_volume),
+            marketCap: sec?.marketCap ?? toNumber(attrs.market_cap),
+          }),
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxCompanies)
+      .map((r) => r.company);
 
     if (companies.length === 0) return [];
     const results: RawDocument[] = [];
@@ -181,4 +223,10 @@ export class ClinicalTrialsConnector extends BaseConnector {
       claims: [{ claimType: 'verified_fact', text: doc.text.slice(0, 500), excerpt: doc.text.slice(0, 200), confidence: 0.95 }],
     };
   }
+}
+
+function toNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
