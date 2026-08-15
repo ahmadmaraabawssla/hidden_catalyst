@@ -209,14 +209,24 @@ export class SecDeepResearcher implements DeepResearcher {
 
     let crossDocumentContext = '';
     let resolvedTerms: Record<string, unknown> = {};
+    let referencedDocumentUnresolved = false;
     const cik = String(metadata.cik || context.company.cik || '');
-    if (cik && /purchase\s+agreement|defined\s+in\s+the|amends\s+the|as\s+defined/i.test(filingText)) {
+    if (cik && /purchase\s+agreement|defined\s+in\s+the|amends\s+the|as\s+defined|referenced\s+agreement/i.test(filingText)) {
       try {
         const resolved = await resolveDefinedTerms(filingText.slice(0, 20_000), cik);
         crossDocumentContext = resolved.context || '';
         resolvedTerms = resolved.terms || {};
-        context.log?.('resolved SEC cross-document terms', { researcher: this.id, terms: Object.keys(resolvedTerms).length });
+        // ── Distinguish "examined, no terms" from "could not retrieve" ──
+        // If the filing references a defined agreement but no terms were resolved,
+        // that is an epistemic gap — the answer lives in a document we could not
+        // pull. Surface it as an explicit unresolved state, not a silent terms=0.
+        referencedDocumentUnresolved = Object.keys(resolvedTerms).length === 0 && !crossDocumentContext;
+        context.log?.(
+          referencedDocumentUnresolved ? 'SEC referenced document unresolved' : 'resolved SEC cross-document terms',
+          { researcher: this.id, terms: Object.keys(resolvedTerms).length }
+        );
       } catch (error) {
+        referencedDocumentUnresolved = true;
         context.log?.('SEC cross-document resolution unavailable', { researcher: this.id, error: (error as Error).message });
       }
     }
@@ -257,6 +267,7 @@ export class SecDeepResearcher implements DeepResearcher {
         ...(Array.isArray(extraction?.missingInfo) ? extraction.missingInfo.map(String) : []),
         !process.env.DEEPSEEK_API_KEY ? 'DEEPSEEK_API_KEY is unavailable; SEC semantic extraction was skipped.' : null,
         filingText.length < 200 ? 'Full SEC filing text could not be retrieved.' : null,
+        referencedDocumentUnresolved ? 'Referenced agreement could not be retrieved — defined terms unresolved.' : null,
       ]),
       openQuestions: Array.isArray(extraction?.openQuestions) ? extraction.openQuestions.map(String) : [],
       amounts: [

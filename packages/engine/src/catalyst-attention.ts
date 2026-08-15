@@ -25,6 +25,12 @@ export interface NewsMentions {
 }
 
 export interface AttentionProfile {
+  /**
+   * Numeric company-attention PROXY only (market-cap + ticker-derived). This is
+   * NOT catalyst-specific attention and must never be treated as measured
+   * evidence. Keep it named explicitly so future code cannot mistake a "90"
+   * proxy for "highly overlooked" proof.
+   */
   attentionScore: number;
   pressRelease: PressReleaseCheck;
   news: NewsMentions;
@@ -35,6 +41,12 @@ export interface AttentionProfile {
    * score is a market-cap-derived proxy with no observed coverage.
    */
   measured: boolean;
+  /**
+   * Epistemic status of attention: 'measured' (catalyst-specific coverage
+   * observed), 'unknown' (not measured — proxy only). No other value is valid;
+   * "overlooked" is NOT a state until catalyst-specific matching exists.
+   */
+  attentionStatus: 'measured' | 'unknown';
 }
 
 /**
@@ -162,6 +174,7 @@ export async function measureAttention(
       news: { count: 0, sentiment: 0 },
       source: 'estimate',
       measured: false,
+      attentionStatus: 'unknown',
     };
   }
 
@@ -181,5 +194,6 @@ export async function measureAttention(
     // coverage — a matching press release or recent news mentions. A
     // market-cap-only score with zero coverage is a proxy, not a measurement.
     measured: pressRelease.found || news.count > 0,
+    attentionStatus: (pressRelease.found || news.count > 0) ? 'measured' : 'unknown',
   };
 }

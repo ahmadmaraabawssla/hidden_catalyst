@@ -84,6 +84,28 @@ function sourceFamily(clusterTypeOrSource: string): string {
 }
 
 /**
+ * The known sourceType values that belong to a coarse source family. Used to
+ * draw a per-family candidate pool at triage (see triageUnclusteredSignals),
+ * so no family is excluded from the pool before the round-robin runs.
+ */
+function sourceTypesForFamily(family: string): string[] {
+  switch (family) {
+    case 'sec':
+      return ['sec_filing'];
+    case 'contracts':
+      return ['federal_contract', 'contract_award', 'contract_modification', 'grant'];
+    case 'regulatory':
+      return ['clinical_trial', 'fda_document', 'device_clearance', 'regulatory_approval', 'regulatory_decision', 'clinical_trial_result', 'clinical_trial_update'];
+    case 'patents':
+      return ['patent_grant', 'patent_assignment'];
+    case 'corporate':
+      return ['merger_acquisition', 'legal_development', 'public_signal'];
+    default:
+      return [];
+  }
+}
+
+/**
  * Extract a small set of search keywords from a cluster title for attention
  * matching (press-release / news keyword lookups). Returns the company name
  * plus the most distinctive title tokens.
@@ -433,40 +455,46 @@ export function classifyQualification(input: QualificationGateInput) {
 }
 
 export async function triageUnclusteredSignals(limit = 100, minPriority = 55, logger?: EngineLogger) {
-  // Freshness-first within each source family, then round-robin across
-  // families. This prevents a dominant family (e.g. clinical trials, which all
-  // score identically) from monopolizing the triage budget and starving SEC —
-  // the platform's richest source. Each family bucket stays ordered by
-  // retrievedAt desc then triageScore desc, so recent signals still win within
-  // a family, but no single family can fill the whole budget.
-  const pool = await prisma.signal.findMany({
-    where: {
-      triageScore: { gte: minPriority },
-      clusterSignals: { none: {} },
-    },
-    orderBy: [{ retrievedAt: 'desc' }, { triageScore: 'desc' }],
-    take: limit * 4,
-  });
+  // ── Source-normalized triage ──
+  // The candidate pool must be drawn PER source family, not from a single
+  // globally-fresh `take limit*4` slice. A global recency sort lets the most
+  // recently harvested family (often SEC) fill the entire pool before any
+  // other family is even loaded — so regulatory/contracts signals never reach
+  // the round-robin. We fetch up to `limit` eligible signals PER family (each
+  // ordered fresh-first internally), then round-robin across families. Every
+  // family is guaranteed representation in the pool; within a family, recency
+  // and triage score still order the candidates.
+  const families = ['sec', 'contracts', 'regulatory', 'patents', 'corporate', 'other'];
+  const buckets: Array<{ family: string; signals: Awaited<ReturnType<typeof prisma.signal.findMany>> }> = [];
 
-  const byFamily = new Map<string, typeof pool>();
-  for (const signal of pool) {
-    const family = sourceFamily(signal.sourceType || '');
-    const bucket = byFamily.get(family) || [];
-    bucket.push(signal);
-    byFamily.set(family, bucket);
+  for (const family of families) {
+    const familySignals = await prisma.signal.findMany({
+      where: {
+        triageScore: { gte: minPriority },
+        clusterSignals: { none: {} },
+        sourceType: { in: sourceTypesForFamily(family) },
+      },
+      orderBy: [{ retrievedAt: 'desc' }, { triageScore: 'desc' }],
+      take: limit,
+    });
+    if (familySignals.length > 0) buckets.push({ family, signals: familySignals });
   }
-  const signals: typeof pool = [];
+
+  const signals: typeof buckets[number]['signals'] = [];
   let advanced = true;
   while (signals.length < limit && advanced) {
     advanced = false;
-    for (const [, bucket] of byFamily) {
+    for (const bucket of buckets) {
       if (signals.length >= limit) break;
-      if (bucket.length > 0) {
-        signals.push(bucket.shift()!);
+      const next = bucket.signals.shift();
+      if (next) {
+        signals.push(next);
         advanced = true;
       }
     }
   }
+
+  const pool = signals;
 
   // Log why each signal was selected (age, source, score) for auditability.
   if (logger) {
@@ -897,14 +925,15 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   }
   logger.log(`[scheduling] candidates=${candidates.length} selected=${clusters.length} families=[${familySizes}]`);
 
-  // ── AI budget: only deep-research the top-N clusters, with per-family
-  // quotas so no single source monopolizes the budget ──
+  // ── AI budget: deep-research the top-N by normalized discovery value ──
   // Deep research is the expensive step (LLM), bounded to deepResearchTopN.
-  // Rank each source family internally by ignored score (a large-but-
-  // underfollowed company outranks a heavily-covered one), then round-robin
-  // across families. This prevents a dominant family (e.g. regulatory/clinical,
-  // all scoring identically) from crowding out SEC — the previous pure-ignored-
-  // score sort let one family occupy 60 of 65 scheduled slots.
+  // Signals COMPETE on a source-normalized "expected discovery value" (not on
+  // per-source quotas): a tiny underfollowed biotech with a phase change should
+  // outrank a stack of boring 10-Qs. The score is deliberately source-agnostic —
+  // it rewards materiality potential, information asymmetry (underfollowed-ness),
+  // and specificity regardless of which source produced the signal. A light
+  // diversity floor ensures no family with eligible candidates is entirely
+  // excluded, but beyond that it is pure value competition.
   const deepTopN = params?.deepResearchTopN ?? 20;
   const deferred: typeof clusters = [];
   let toEvaluate: typeof clusters = clusters;
@@ -917,24 +946,25 @@ export async function runSourceAgnosticIntelligencePass(params?: {
       byFamily.set(family, bucket);
     }
     for (const bucket of byFamily.values()) {
-      bucket.sort((a, b) => clusterIgnoredScore(b) - clusterIgnoredScore(a));
+      bucket.sort((a, b) => clusterDiscoveryValue(b) - clusterDiscoveryValue(a));
     }
-    const families = [...byFamily.entries()].sort((a, b) => b[1].length - a[1].length);
+    // 1) Diversity floor: take the top cluster from each family (if present).
     toEvaluate = [];
-    let advanced = true;
-    while (toEvaluate.length < deepTopN && advanced) {
-      advanced = false;
-      for (const [, bucket] of families) {
-        if (toEvaluate.length >= deepTopN) break;
-        if (bucket.length > 0) {
-          toEvaluate.push(bucket.shift()!);
-          advanced = true;
-        }
-      }
+    for (const [, bucket] of byFamily) {
+      const top = bucket.shift();
+      if (top) toEvaluate.push(top);
     }
-    deferred.push(...families.flatMap(([, bucket]) => bucket));
+    // 2) Value competition for the remaining slots across all families.
+    const remainingBuckets = [...byFamily.values()];
+    const rest = remainingBuckets.flat().sort((a, b) => clusterDiscoveryValue(b) - clusterDiscoveryValue(a));
+    for (const cluster of rest) {
+      if (toEvaluate.length >= deepTopN) break;
+      toEvaluate.push(cluster);
+    }
+    const evaluatedSet = new Set(toEvaluate);
+    deferred.push(...remainingBuckets.flat().filter((c) => !evaluatedSet.has(c)));
     const kept = [...new Set(toEvaluate.map((c) => sourceFamily(c.clusterType || '')))].join(', ');
-    logger.log(`[budget] deepResearchTopN=${deepTopN} evaluated=${toEvaluate.length} deferred=${deferred.length} families=[${kept}]`);
+    logger.log(`[budget] deepResearchTopN=${deepTopN} evaluated=${toEvaluate.length} deferred=${deferred.length} families=[${kept}] (normalized discovery value)`);
   }
 
   const skippedFresh = await prisma.catalystCluster.count({
@@ -1015,4 +1045,59 @@ function clusterIgnoredScore(cluster: { signals: Array<{ signal: { rawMetadata?:
     if (Number.isFinite(score) && score > best) best = score;
   }
   return best;
+}
+
+/**
+ * Source-normalized "expected discovery value" for a cluster.
+ *
+ * This is the cross-source ranking key for the deep-research budget. It is
+ * deliberately source-agnostic: a cluster from any family is scored on the same
+ * dimensions, so signals COMPETE on value rather than being assigned quotas.
+ * The dimensions (each 0..1, weighted) are:
+ *
+ *   - materialityPotential : does the cluster carry a dollar amount? (bigger →
+ *     more likely a financially meaningful event). Source-agnostic — a contract
+ *     award and an SEC 8-K both carry amounts; a bare clinical trial does not.
+ *   - asymmetry            : underfollowed-ness (ignored score), the core
+ *     "hidden catalyst" thesis. High = genuinely under the market's radar.
+ *   - specificity          : how specific the event type is (a concrete
+ *     `contract_award` / `clinical_trial_result` / `8-K` beats a generic
+ *     `public_signal`). Rewards mechanism specificity.
+ *   - recency              : fresher signals are worth more (staleness penalty).
+ *
+ * No single dimension dominates, and no source is inherently favored: a tiny
+ * underfollowed biotech with a phase change can outrank a stack of routine
+ * 10-Qs, which is exactly the point of the product thesis.
+ */
+function clusterDiscoveryValue(cluster: { clusterType?: string | null; firstSeenAt?: Date | null; signals: Array<{ signal: { rawMetadata?: unknown; amounts?: unknown; publishedAt?: Date | null } }> }): number {
+  // 1. Materiality potential: largest dollar amount across linked signals (log-scaled).
+  let maxAmount = 0;
+  for (const { signal } of cluster.signals) {
+    const amounts = Array.isArray(signal.amounts) ? signal.amounts as Array<{ value?: number | null }> : [];
+    for (const a of amounts) {
+      const v = Number(a?.value || 0);
+      if (v > maxAmount) maxAmount = v;
+    }
+  }
+  // log10 scale: $0 → 0, $10K → 0.25, $1M → 0.5, $100M → 0.75, $1B+ → 1.0
+  const materialityPotential = maxAmount <= 0 ? 0 : Math.min(1, Math.log10(maxAmount) / 9);
+
+  // 2. Information asymmetry (underfollowed-ness), 0..100 → 0..1.
+  const asymmetry = clusterIgnoredScore(cluster) / 100;
+
+  // 3. Mechanism specificity: concrete event types score higher than generic.
+  const t = String(cluster.clusterType || '').toLowerCase();
+  let specificity = 0.3; // generic fallback
+  if (/contract_award|contract_modification|clinical_trial_result|regulatory_approval|patent_grant|merger_acquisition|acquisition|material_agreement/.test(t)) specificity = 1.0;
+  else if (/8-?k|10-?k|10-?q|s-?1|13d|13g|clinical_trial_update|device_clearance|regulatory_decision|federal_contract/.test(t)) specificity = 0.75;
+  else if (/clinical_trial|regulatory|fda|patent|contract|award|grant|merger|legal/.test(t)) specificity = 0.5;
+
+  // 4. Recency: fresher is better (0..1).
+  const ageDays = cluster.firstSeenAt
+    ? Math.max(0, (Date.now() - cluster.firstSeenAt.getTime()) / 86400000)
+    : 30;
+  const recency = ageDays <= 1 ? 1 : ageDays <= 7 ? 0.85 : ageDays <= 30 ? 0.6 : ageDays <= 90 ? 0.35 : 0.15;
+
+  // Weighted, source-normalized expected discovery value (0..1).
+  return 0.35 * materialityPotential + 0.30 * asymmetry + 0.20 * specificity + 0.15 * recency;
 }

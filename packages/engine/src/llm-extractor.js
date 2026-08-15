@@ -217,12 +217,25 @@ async function extractFromFiling(filingText, companyName, ticker, formType, sect
   var claimText = ha && typeof ha.claim === 'string' ? ha.claim.trim() : '';
   var isBoilerplate = /no hidden angle|no material|routine|nothing material|no significant|not material|no material items|no material obligation|\bn\/?a\b/i.test(claimText);
   var hasConcreteAngle = claimText.length >= 20 && !isBoilerplate;
+  // A boilerplate "no hidden angle" claim is NOT a hidden angle. Normalize so
+  // the derived `hidden` boolean can never be true when the claim itself says
+  // no angle exists — the raw `hiddenAngle` object is only meaningful when it
+  // carries a concrete claim.
+  if (!hasConcreteAngle) ha = null;
   var isRoutine = a.isRoutine === true;
   // The model's explicit verdict is authoritative: shouldQualify must be true
   // AND the angle must be concrete (not boilerplate). We never manufacture a
   // qualification from a routine filing.
   var qualified = a.shouldQualify === true && hasConcreteAngle;
-  var verConf = a.verificationConfidence || (ha && typeof ha.confidence === 'number' ? ha.confidence : (qualified ? 0.7 : 0.35));
+  // ── Do NOT silently mutate confidence ──
+  // Preserve the model's raw verificationConfidence even when 0. Only fall back
+  // to the hidden-angle confidence when verificationConfidence is ABSENT
+  // (null/undefined), never when it is 0 — a 0 must stay a 0, otherwise we
+  // destroy traceable epistemics. Log both raw and adjusted for auditability.
+  var rawVerConf = a.verificationConfidence;
+  var verConf = (rawVerConf != null && !isNaN(Number(rawVerConf)))
+    ? Number(rawVerConf)
+    : (ha && typeof ha.confidence === 'number' ? ha.confidence : (qualified ? 0.7 : 0.35));
   var verification = qualified ? (verConf >= 0.85 ? 'verified' : 'candidate') : (isRoutine ? 'rejected' : 'watch');
   var title = a.insightTitle || (ha && hasConcreteAngle ? (ticker+': '+ha.claim.slice(0,80)) : ('['+formType+'] '+companyName));
 
@@ -244,16 +257,17 @@ async function extractFromFiling(filingText, companyName, ticker, formType, sect
     factsArray = Object.entries(facts||{}).filter(function(e){return e[1]!=null&&e[1]!==''}).map(function(e){return e[0]+': '+e[1]});
   }
 
-  console.log('  [LLM v3] '+ticker+': routine='+a.isRoutine+' hidden='+(ha!=null)+' qualify='+qualified+' verConf='+verConf.toFixed(2)+' → '+verification);  // ── Raw-output observability ──
+  console.log('  [LLM v3] '+ticker+': routine='+isRoutine+' hidden='+hasConcreteAngle+' qualify='+qualified+' rawVerConf='+rawVerConf+' verConf='+verConf.toFixed(2)+' → '+verification);
+  // ── Raw-output observability ──
   // Log the model's actual fields (not just the resolved verdict) so a reviewer
-  // can tell whether a suspiciously-uniform result (e.g. "5/5 routine=true
-  // hidden=true verConf=0.10") is real LLM output or a default/fallback path.
-  // The claim is truncated to avoid flooding logs but retains the signal of
-  // whether the model produced a concrete angle vs a boilerplate one.
+  // can tell whether a suspiciously-uniform result is real LLM output or a
+  // default/fallback path. Also log raw vs adjusted confidence explicitly so
+  // any post-processing mutation is traceable.
   var rawClaim = ha && ha.claim ? String(ha.claim).slice(0, 100).replace(/\s+/g,' ') : '';
   var rawMat = a.financialMateriality ? JSON.stringify(a.financialMateriality).slice(0, 140) : 'null';
-  console.log('  [LLM raw] '+ticker+': isRoutine='+JSON.stringify(a.isRoutine)+' shouldQualify='+JSON.stringify(a.shouldQualify)+' verConf='+JSON.stringify(a.verificationConfidence)+' mat='+rawMat);
-  if (rawClaim) console.log('  [LLM raw] '+ticker+': claim="'+rawClaim+'"');  return {
+  console.log('  [LLM raw] '+ticker+': isRoutine='+JSON.stringify(a.isRoutine)+' shouldQualify='+JSON.stringify(a.shouldQualify)+' rawVerConf='+JSON.stringify(rawVerConf)+' adjustedVerConf='+verConf+' mat='+rawMat);
+  if (rawClaim) console.log('  [LLM raw] '+ticker+': claim="'+rawClaim+'"');
+  return {
     eventType:'other',
     eventSummary:title,
     verifiedFacts:factsArray,
