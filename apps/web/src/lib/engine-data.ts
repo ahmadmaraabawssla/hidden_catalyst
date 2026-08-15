@@ -11,7 +11,7 @@
  * Uses raw `pg` (not Prisma) because the Prisma client is not regenerated
  * for every schema field and the existing pages already read via pg.
  */
-import { Client } from 'pg';
+import { Pool } from 'pg';
 
 export type ThesisStatus = 'reject' | 'watch' | 'candidate' | 'verified';
 export type CheckStatus = 'verified' | 'partial' | 'pending' | 'failed' | 'not_applicable';
@@ -158,7 +158,15 @@ export interface OpportunityResearch {
 }
 
 function pgClient() {
-  return new Client({ connectionString: process.env.DATABASE_URL });
+  // ── Shared pool ──
+  // Supabase pooler runs in session mode (pool_size 15). A fresh Client per
+  // function call leaks a connection per query and hits "max clients reached".
+  // A single module-level pool reuses connections and stays well under the cap.
+  const globalPool = globalThis as unknown as { __hcPgPool?: Pool };
+  if (!globalPool.__hcPgPool) {
+    globalPool.__hcPgPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+  }
+  return globalPool.__hcPgPool;
 }
 
 function asString(value: unknown): string {
@@ -357,10 +365,15 @@ export async function getEngineOpportunities(opts?: {
   verificationStatus?: string[];
   limit?: number;
 }): Promise<OpportunityResearch[]> {
-  const client = pgClient();
   const params: unknown[] = [];
   const statuses = opts?.verificationStatus ?? ['verified', 'candidate', 'watch'];
   params.push(statuses);
+  // Match the engine's DISCOVERY_MAX_MARKET_CAP (default $20B) so the display
+  // layer and the harvest layer agree: a mega-cap (e.g. Bank of Nova Scotia
+  // $152B) is NOT "underfollowed" and must not appear as a discovery, even if
+  // it was harvested before the underfollowed-selection filter existed.
+  const maxCap = Number(process.env.DISCOVERY_MAX_MARKET_CAP || 20_000_000_000);
+  params.push(maxCap);
   const query = `
     SELECT ${OPPORTUNITY_SELECT}
     ${OPPORTUNITY_JOIN}
@@ -370,6 +383,7 @@ export async function getEngineOpportunities(opts?: {
       AND o.status != 'archived'
       AND s.active = true
       AND s.exchange IN ('NYSE', 'NASDAQ', 'NYSE American')
+      AND (s.market_cap IS NULL OR s.market_cap <= $2)
     ORDER BY
       CASE o.verification_status WHEN 'verified' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
       o.published_at DESC NULLS LAST,
@@ -377,72 +391,93 @@ export async function getEngineOpportunities(opts?: {
     LIMIT ${opts?.limit ?? 100}
   `;
   try {
-    await client.connect();
-    const res = await client.query(query, params);
+    const res = await pgClient().query(query, params);
     return res.rows.map(mapOpportunity);
-  } finally {
-    await client.end().catch(() => undefined);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * True counts of discovery opportunities by verification status, respecting
+ * the same market-cap ceiling as the list query (so the badge number matches
+ * what's actually shown). Returns { qualified, watch }.
+ */
+export async function getEngineCounts(): Promise<{ qualified: number; watch: number }> {
+  try {
+    const maxCap = Number(process.env.DISCOVERY_MAX_MARKET_CAP || 20_000_000_000);
+    const res = await pgClient().query(
+      `SELECT
+         COUNT(*) FILTER (WHERE o.verification_status IN ('verified','candidate')) AS qualified,
+         COUNT(*) FILTER (WHERE o.verification_status = 'watch') AS watch
+       FROM opportunities o
+       JOIN securities s ON s.id = o.security_id
+       WHERE o.engine_version = 'source-agnostic-v2'
+         AND o.status NOT IN ('rejected','archived')
+         AND s.active = true
+         AND s.exchange IN ('NYSE','NASDAQ','NYSE American')
+         AND (s.market_cap IS NULL OR s.market_cap <= $1)`,
+      [maxCap]
+    );
+    const row = res.rows[0];
+    return {
+      qualified: Number(row?.qualified ?? 0),
+      watch: Number(row?.watch ?? 0),
+    };
+  } catch {
+    return { qualified: 0, watch: 0 };
   }
 }
 
 /** Fetch a single opportunity with its full research report + signals. */
 export async function getEngineOpportunity(id: string): Promise<OpportunityResearch | null> {
-  const client = pgClient();
-  try {
-    await client.connect();
-    const res = await client.query(
-      `SELECT ${OPPORTUNITY_SELECT} ${OPPORTUNITY_JOIN} WHERE o.id = $1`,
-      [id]
-    );
-    if (!res.rows[0]) return null;
-    const opp = mapOpportunity(res.rows[0] as Record<string, unknown>);
+  const pool = pgClient();
+  const res = await pool.query(
+    `SELECT ${OPPORTUNITY_SELECT} ${OPPORTUNITY_JOIN} WHERE o.id = $1`,
+    [id]
+  );
+  if (!res.rows[0]) return null;
+  const opp = mapOpportunity(res.rows[0] as Record<string, unknown>);
 
-    // Load linked signals
-    const sigRes = await client.query(
-      `SELECT s.id, s.title, s.source_type, s.event_type, s.published_at, s.source_url, cs.role,
-              s.external_id, s.raw_metadata
-       FROM catalyst_cluster_signals cs
-       JOIN signals s ON s.id = cs.signal_id
-       WHERE cs.cluster_id = (SELECT cluster_id FROM opportunities WHERE id = $1)
-       ORDER BY (cs.role = 'primary') DESC, s.published_at DESC
-       LIMIT 10`,
-      [id]
-    );
-    opp.signals = sigRes.rows.map((r) => {
-      const meta = jsonOrNull<Record<string, unknown>>(r.raw_metadata);
-      return {
-        id: asString(r.id),
-        title: asString(r.title),
-        sourceType: asString(r.source_type),
-        eventType: r.event_type != null ? asString(r.event_type) : null,
-        publishedAt: asString(r.published_at),
-        sourceUrl: asString(r.source_url),
-        role: asString(r.role),
-        externalId: asString(r.external_id),
-        amount: asNumber(meta?.amount),
-        ceiling: asNumber(meta?.ceiling),
-        amountIsCeiling: asBool(meta?.amountIsCeiling),
-      };
-    });
-    return opp;
-  } finally {
-    await client.end().catch(() => undefined);
-  }
+  // Load linked signals
+  const sigRes = await pool.query(
+    `SELECT s.id, s.title, s.source_type, s.event_type, s.published_at, s.source_url, cs.role,
+            s.external_id, s.raw_metadata
+     FROM catalyst_cluster_signals cs
+     JOIN signals s ON s.id = cs.signal_id
+     WHERE cs.cluster_id = (SELECT cluster_id FROM opportunities WHERE id = $1)
+     ORDER BY (cs.role = 'primary') DESC, s.published_at DESC
+     LIMIT 10`,
+    [id]
+  );
+  opp.signals = sigRes.rows.map((r) => {
+    const meta = jsonOrNull<Record<string, unknown>>(r.raw_metadata);
+    return {
+      id: asString(r.id),
+      title: asString(r.title),
+      sourceType: asString(r.source_type),
+      eventType: r.event_type != null ? asString(r.event_type) : null,
+      publishedAt: asString(r.published_at),
+      sourceUrl: asString(r.source_url),
+      role: asString(r.role),
+      externalId: asString(r.external_id),
+      amount: asNumber(meta?.amount),
+      ceiling: asNumber(meta?.ceiling),
+      amountIsCeiling: asBool(meta?.amountIsCeiling),
+    };
+  });
+  return opp;
 }
 
 /** When the engine last finished a run (newest signal.retrieved_at or ingestion run). */
 export async function getLastEngineRun(): Promise<string | null> {
-  const client = pgClient();
   try {
-    await client.connect();
-    const res = await client.query(
+    const res = await pgClient().query(
       `SELECT MAX(retrieved_at) AS last_run FROM signals`
     );
     const val = res.rows[0]?.last_run as string | null | undefined;
     return val ? String(val) : null;
   } catch {
     return null;
-  } finally {
-    await client.end().catch(() => undefined);
   }
 }

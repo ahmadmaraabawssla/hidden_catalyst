@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getEngineOpportunities, getLastEngineRun } from '@/lib/engine-data';
+import { getEngineOpportunities, getLastEngineRun, getEngineCounts } from '@/lib/engine-data';
 import { formatMC, formatPrice, cleanCompanyName, formatRatio, relativeTime, plainMateriality, plainDirection, isStale, discoveryDelayDays } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
@@ -10,14 +10,17 @@ const QUALIFIED = ['verified', 'candidate'];
 export default async function FeedPage({ searchParams }: { searchParams: Record<string, string | undefined> }) {
   const tab = searchParams.tab === 'queue' ? 'queue' : 'qualified';
 
-  const [qualified, queue, lastRun] = await Promise.all([
+  const [qualified, queue, lastRun, counts] = await Promise.all([
     getEngineOpportunities({ verificationStatus: QUALIFIED }),
     getEngineOpportunities({ verificationStatus: ['watch'] }),
     getLastEngineRun(),
+    getEngineCounts(),
   ]);
 
   const opportunities = tab === 'queue' ? queue : qualified;
-  const queueCount = queue.length;
+  // Use the true counts (respecting the market-cap ceiling), not the truncated list length.
+  const qualifiedCount = counts.qualified;
+  const queueCount = counts.watch;
 
   return (
     <div className="page-container">
@@ -42,7 +45,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
         >
           Worth a look
           <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${tab === 'qualified' ? 'bg-brand-50 text-brand-700' : 'bg-gray-100 text-gray-500'}`}>
-            {qualified.length}
+            {qualifiedCount}
           </span>
         </a>
         <a
