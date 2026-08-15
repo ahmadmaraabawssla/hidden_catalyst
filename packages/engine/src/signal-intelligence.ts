@@ -754,7 +754,25 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     else await prisma.opportunity.create({ data });
     logger.log(`[persist] cluster=${clusterId} opportunity=${existing?.id || 'created'} status=${opportunityStatus} verification=${researchReport.thesisStatus}`);
   } else {
-    logger.log(`[persist] cluster=${clusterId} opportunity=skipped reason=unresolved_public_security`);
+    // ── Close stale opportunities on reject even when security is unresolved ──
+    // Entity re-resolution can fail on a re-evaluation (e.g. a fuzzy-matched
+    // company name that no longer resolves), which would otherwise leave a stale
+    // "watch"/"candidate" opportunity pointing at a now-rejected cluster. On a
+    // reject verdict, close any orphaned opportunity for this cluster so the
+    // feed and the cluster status never diverge.
+    if (researchReport.thesisStatus === 'reject') {
+      const stale = await prisma.opportunity.findMany({ where: { clusterId, verificationStatus: { in: ['watch', 'candidate', 'verified'] } } });
+      for (const opp of stale) {
+        await prisma.opportunity.update({
+          where: { id: opp.id },
+          data: { status: 'rejected', verificationStatus: 'rejected', lastResearchedAt: new Date(), publishedAt: null },
+        });
+      }
+      if (stale.length) logger.log(`[persist] cluster=${clusterId} closedStaleOpportunities=${stale.length} reason=unresolved_public_security_reject`);
+      else logger.log(`[persist] cluster=${clusterId} opportunity=skipped reason=unresolved_public_security`);
+    } else {
+      logger.log(`[persist] cluster=${clusterId} opportunity=skipped reason=unresolved_public_security`);
+    }
   }
 
   return { clusterId, materiality, adversarial, qualification, researchReport, deepResearch, completeness, log: evaluationLog };

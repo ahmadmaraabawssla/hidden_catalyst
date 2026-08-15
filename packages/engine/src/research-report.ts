@@ -282,6 +282,14 @@ function completenessFromChecks(checks: ResearchCheck[]) {
   return Math.round(score * 100);
 }
 
+/**
+ * An item that sits in "watch" with no computable materiality ratio for longer
+ * than this window will never resolve — the missing amount/denominator isn't
+ * coming. Close it out rather than parking it on the shelf indefinitely.
+ * Aligned with the widest connector freshness window (contracts, 45 days).
+ */
+const WATCH_SHELF_LIFE_MS = 45 * 86400000;
+
 function statusFromReport(args: {
   hasPrimaryEvidence: boolean;
   hasThesis: boolean;
@@ -291,6 +299,7 @@ function statusFromReport(args: {
   relationshipConfidence: number;
   llmIsRoutine: boolean;
   eventType: string;
+  eventAgeMs: number | null;
 }) {
   const reasons: string[] = [];
   if (!args.hasPrimaryEvidence) reasons.push('No primary public evidence linked.');
@@ -322,12 +331,24 @@ function statusFromReport(args: {
   }
 
   // ── No-economic-mechanism closure ──
-  // A clinical trial / regulatory record with no extracted amount has no
+  // A clinical trial / regulatory record with no extracted dollar amount has no
   // measurable economic link to a listed company — it is routine registry data,
   // not a catalyst under investigation. Close it out rather than letting it
-  // accumulate in "watch" forever (the previous behavior left 85+ trials stuck).
-  if (/clinical_trial|trial|regulatory/.test(args.eventType) && args.materiality.ratio == null && args.materiality.denominator == null) {
-    reasons.push('Clinical/regulatory record has no measurable economic mechanism — routine registry data.');
+  // accumulate in "watch" forever. Gate on `numerator` (the event amount), NOT
+  // `denominator`: clinical/regulatory records always inherit a market-cap
+  // derived denominator, so the old `denominator == null` check never fired and
+  // left ~200 routine registry records parked in "watch".
+  if (/clinical_trial|trial|regulatory/.test(args.eventType) && args.materiality.numerator == null) {
+    reasons.push('Clinical/regulatory record has no extracted dollar amount — no measurable economic mechanism.');
+    return { status: 'reject' as ThesisStatus, reasons };
+  }
+
+  // ── Watch shelf-life closure ──
+  // An item still in "watch" with no computable ratio after the research window
+  // will never resolve (the missing amount/denominator is not coming). Close it
+  // out instead of letting it accumulate on the shelf forever.
+  if (args.materiality.ratio == null && args.eventAgeMs != null && args.eventAgeMs > WATCH_SHELF_LIFE_MS) {
+    reasons.push('No economic mechanism resolved within the research window — closing out.');
     return { status: 'reject' as ThesisStatus, reasons };
   }
 
@@ -412,6 +433,11 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
   // Direction comes from the researcher's inference when available, else from
   // the event type + text deterministically.
   const direction: CatalystDirection = input.deepResearch?.direction ?? inferDirection(input.eventType, combined);
+  // Age of the most recent linked signal — drives the watch shelf-life closure.
+  const signalTimes = input.signals
+    .map((s) => (s.publishedAt ? new Date(s.publishedAt).getTime() : NaN))
+    .filter((t) => Number.isFinite(t));
+  const eventAgeMs = signalTimes.length > 0 ? Date.now() - Math.max(...signalTimes) : null;
   const qualification = statusFromReport({
     hasPrimaryEvidence: input.signals.length > 0,
     hasThesis: !!input.thesis || input.signals.length > 0,
@@ -421,6 +447,7 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     relationshipConfidence,
     llmIsRoutine,
     eventType: input.eventType,
+    eventAgeMs,
   });
   const confidence = clamp(
     35 +

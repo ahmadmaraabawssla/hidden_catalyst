@@ -27,7 +27,32 @@ export class FDAConnector extends BaseConnector {
 
   async fetchDocuments(since?: Date): Promise<RawDocument[]> {
     const sinceDate = since || new Date(Date.now() - 30 * 86400000);
+    const maxCap = Number(process.env.DISCOVERY_MAX_MARKET_CAP || 20_000_000_000);
     const results: RawDocument[] = [];
+
+    // ── Underfollowed-company gate ──
+    // A drug approval for Pfizer/BMS is routine industry news, not a hidden
+    // catalyst. Only surface approvals whose manufacturer is a listed,
+    // underfollowed company (below the market-cap ceiling). The manufacturer
+    // name from openFDA is matched against our company universe on a normalized
+    // stem, so "GILEAD SCIENCES INC" ≈ "Gilead Sciences, Inc.".
+    const universe = await this.prisma.company.findMany({
+      where: {
+        securities: {
+          some: {
+            active: true,
+            exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] },
+            marketCap: { lte: maxCap },
+          },
+        },
+      },
+      select: { displayName: true },
+    });
+    const underfollowedStems = new Set(
+      universe
+        .map((c) => String(c.displayName || '').toLowerCase().replace(/[^a-z0-9]+/g, ''))
+        .filter((s) => s.length >= 3)
+    );
 
     try {
       // Fetch recent FDA drug approvals from openFDA
@@ -47,6 +72,11 @@ export class FDAConnector extends BaseConnector {
         const generic = item?.openfda?.generic_name?.[0] || '';
         const manufacturer = item?.openfda?.manufacturer_name?.[0] || '';
         const appNum = item?.openfda?.application_number?.[0] || '';
+
+        // Drop approvals whose manufacturer is not an underfollowed public
+        // company (mega-cap pharma approvals are routine, not hidden catalysts).
+        const manufacturerStem = String(manufacturer || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+        if (manufacturerStem.length >= 3 && !underfollowedStems.has(manufacturerStem)) continue;
 
         results.push({
           canonicalUrl: `https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo=${appNum}`,

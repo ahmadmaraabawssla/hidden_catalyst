@@ -182,6 +182,53 @@ describe('buildResearchReport', () => {
     expect(report.qualificationReasons.some((r) => r.includes('immaterial'))).toBe(true);
   });
 
+  it('rejects a clinical trial with no extracted dollar amount (no economic mechanism)', () => {
+    const materiality = computeMateriality({
+      eventType: 'clinical_trial_result',
+      amount: null,
+      enterpriseValue: 475_000_000, // market-cap-derived denominator is present
+    });
+    const adversarial = runDeterministicAdversarialCheck({
+      eventType: 'clinical_trial_result',
+      title: 'Trial: A Study to Investigate the Effect of a Drug',
+      thesis: 'trial thesis',
+      materialityRatio: materiality.ratio,
+      evidenceQuality: 90,
+      relationshipConfidence: 90,
+    });
+    const report = buildResearchReport({
+      title: 'Trial: A Study to Investigate the Effect of a Drug',
+      eventType: 'clinical_trial_result',
+      thesis: 'trial thesis',
+      materiality,
+      adversarial,
+      signals: [{ title: 'Trial record', sourceType: 'clinical_trials', rawText: 'trial', sourceQuality: 90 }],
+      attentionAvailable: true, attentionMeasured: false, priceReactionAvailable: true, priceReactionMeasured: true,
+      relationshipConfidence: 90,
+    });
+    expect(report.thesisStatus).toBe('reject');
+    expect(report.qualificationReasons.some((r) => r.includes('no extracted dollar amount'))).toBe(true);
+  });
+
+  it('closes out a watch item with no ratio after the shelf-life window', () => {
+    const materiality = computeMateriality({ eventType: '8-K', amount: null });
+    const adversarial = runDeterministicAdversarialCheck({
+      eventType: '8-K', title: 'old filing', thesis: 'x', materialityRatio: materiality.ratio, evidenceQuality: 90, relationshipConfidence: 90,
+    });
+    const report = buildResearchReport({
+      title: 'old filing',
+      eventType: '8-K',
+      thesis: 'x',
+      materiality,
+      adversarial,
+      signals: [{ title: '8-K', sourceType: 'sec_filing', rawText: 'x', sourceQuality: 90, publishedAt: new Date(Date.now() - 50 * 86400000) }],
+      attentionAvailable: false, priceReactionAvailable: false,
+      relationshipConfidence: 90,
+    });
+    expect(report.thesisStatus).toBe('reject');
+    expect(report.qualificationReasons.some((r) => r.includes('closing out'))).toBe(true);
+  });
+
   it('enforces the invariant: LLM "routine" verdict rejects regardless of materiality', () => {
     const materiality = computeMateriality({
       eventType: '8-K',

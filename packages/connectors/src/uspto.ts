@@ -5,9 +5,16 @@
  */
 
 import { BaseConnector, type RawDocument, type ExtractionResult } from './base';
+import { computeIgnoredScore } from '@hidden-catalyst/domain';
 import type { PrismaClient } from '@hidden-catalyst/db';
 
 const USPTO_BASE = 'https://developer.uspto.gov/ibd-api/v1/';
+
+function toNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
 export class USPTOConnector extends BaseConnector {
   constructor(prisma: PrismaClient) {
@@ -22,11 +29,53 @@ export class USPTOConnector extends BaseConnector {
   }
 
   async fetchDocuments(since?: Date): Promise<RawDocument[]> {
-    const companies = await this.prisma.company.findMany({
-      where: { cik: { not: null } },
-      select: { displayName: true },
-      take: 50,
+    const maxCompanies = Number(process.env.PATENT_COMPANY_LIMIT || 50);
+    const maxCap = Number(process.env.DISCOVERY_MAX_MARKET_CAP || 20_000_000_000);
+
+    // ── Underfollowed-company selection ──
+    // A patent grant to a mega-cap (e.g. Intel/Apple) is routine IP activity,
+    // not a hidden catalyst. Only discover patents for companies that are
+    // actually underfollowed: below the market-cap ceiling AND ranked by
+    // ignored-score (news + dollar volume + cap). This replaces the old "first
+    // 50 companies with a CIK" behavior which surfaced mega-cap patents as if
+    // they were obscure.
+    const universe = await this.prisma.company.findMany({
+      where: {
+        cik: { not: null },
+        securities: {
+          some: {
+            active: true,
+            exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] },
+            marketCap: { lte: maxCap },
+          },
+        },
+      },
+      select: {
+        displayName: true,
+        securities: {
+          where: { active: true },
+          select: { ticker: true, marketCap: true, avgDollarVolume: true, attributes: true },
+          take: 1,
+        },
+      },
     });
+
+    const companies = universe
+      .map((company) => {
+        const sec = company.securities[0];
+        const attrs = (sec?.attributes ?? {}) as Record<string, unknown>;
+        return {
+          company,
+          score: computeIgnoredScore({
+            news7d: toNumber(attrs.news_7d),
+            avgDollarVolume: sec?.avgDollarVolume ?? toNumber(attrs.avg_dollar_volume),
+            marketCap: sec?.marketCap ?? toNumber(attrs.market_cap),
+          }),
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxCompanies)
+      .map((r) => r.company);
 
     if (companies.length === 0) return [];
     const results: RawDocument[] = [];
