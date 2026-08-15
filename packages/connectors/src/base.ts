@@ -259,24 +259,7 @@ export abstract class BaseConnector {
   }
 
   private calculateSignalPriority(signal: NormalizedSignal): { score: number; factors: Record<string, number> } {
-    const largestAmount = Math.max(0, ...signal.amounts.map((amount) => amount.value || 0));
-    const daysOld = Math.max(0, Math.round((Date.now() - signal.publishedAt.getTime()) / 86400000));
-    const eventTypeScore = /award|approval|clearance|trial|patent|merger|contract/i.test(String(signal.eventType || '')) ? 85 : 45;
-    const amountScore = largestAmount >= 100_000_000 ? 95 : largestAmount >= 10_000_000 ? 75 : largestAmount > 0 ? 50 : 20;
-    const recencyScore = daysOld <= 1 ? 95 : daysOld <= 7 ? 70 : daysOld <= 30 ? 45 : 20;
-    const entityScore = signal.entities.length > 1 ? 70 : signal.entities.length === 1 ? 50 : 20;
-    const score = Math.round(
-      signal.sourceQuality * 0.25 +
-      eventTypeScore * 0.25 +
-      amountScore * 0.25 +
-      recencyScore * 0.15 +
-      entityScore * 0.10
-    );
-
-    return {
-      score: Math.max(1, Math.min(100, score)),
-      factors: { sourceQuality: signal.sourceQuality, eventTypeScore, amountScore, recencyScore, entityScore },
-    };
+    return calculateSignalPriority(signal);
   }
 
   private async startRun(): Promise<string> {
@@ -316,4 +299,37 @@ export abstract class BaseConnector {
       },
     });
   }
+}
+
+/**
+ * Priority score for a normalized signal at ingestion/triage time.
+ *
+ * The score decides whether a signal clears the `MIN_RESEARCH_PRIORITY` triage
+ * threshold and is clustered for deep research. It must not silently starve a
+ * source family: an SEC 8-K / 13D / S-1 filing is a material event by
+ * definition, so SEC form types are recognized here. Previously they fell to
+ * the generic 45 and the whole SEC family scored ~54 — one point below the
+ * default 55 threshold — so the platform's richest source never reached
+ * research (the "SEC produced 469 docs but zero reached research" defect).
+ */
+export function calculateSignalPriority(signal: NormalizedSignal): { score: number; factors: Record<string, number> } {
+  const largestAmount = Math.max(0, ...signal.amounts.map((amount) => amount.value || 0));
+  const daysOld = Math.max(0, Math.round((Date.now() - signal.publishedAt.getTime()) / 86400000));
+  const eventType = String(signal.eventType || '');
+  const eventTypeScore = /award|approval|clearance|trial|patent|merger|acquisition|contract|agreement|financing|offering|definitive|8-?k|10-?k|10-?q|s-?1|13d|13g/i.test(eventType) ? 85 : 45;
+  const amountScore = largestAmount >= 100_000_000 ? 95 : largestAmount >= 10_000_000 ? 75 : largestAmount > 0 ? 50 : 20;
+  const recencyScore = daysOld <= 1 ? 95 : daysOld <= 7 ? 70 : daysOld <= 30 ? 45 : 20;
+  const entityScore = signal.entities.length > 1 ? 70 : signal.entities.length === 1 ? 50 : 20;
+  const score = Math.round(
+    signal.sourceQuality * 0.25 +
+    eventTypeScore * 0.25 +
+    amountScore * 0.25 +
+    recencyScore * 0.15 +
+    entityScore * 0.10
+  );
+
+  return {
+    score: Math.max(1, Math.min(100, score)),
+    factors: { sourceQuality: signal.sourceQuality, eventTypeScore, amountScore, recencyScore, entityScore },
+  };
 }

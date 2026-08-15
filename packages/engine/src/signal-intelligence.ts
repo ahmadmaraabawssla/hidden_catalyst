@@ -402,17 +402,40 @@ export function classifyQualification(input: QualificationGateInput) {
 }
 
 export async function triageUnclusteredSignals(limit = 100, minPriority = 55, logger?: EngineLogger) {
-  // Freshness-first: signals harvested most recently get clustered before old
-  // lingering unclustered signals. This prevents prior runs' leftover signals
-  // from monopolizing the triage budget ahead of this run's new harvest.
-  const signals = await prisma.signal.findMany({
+  // Freshness-first within each source family, then round-robin across
+  // families. This prevents a dominant family (e.g. clinical trials, which all
+  // score identically) from monopolizing the triage budget and starving SEC —
+  // the platform's richest source. Each family bucket stays ordered by
+  // retrievedAt desc then triageScore desc, so recent signals still win within
+  // a family, but no single family can fill the whole budget.
+  const pool = await prisma.signal.findMany({
     where: {
       triageScore: { gte: minPriority },
       clusterSignals: { none: {} },
     },
     orderBy: [{ retrievedAt: 'desc' }, { triageScore: 'desc' }],
-    take: limit,
+    take: limit * 4,
   });
+
+  const byFamily = new Map<string, typeof pool>();
+  for (const signal of pool) {
+    const family = sourceFamily(signal.sourceType || '');
+    const bucket = byFamily.get(family) || [];
+    bucket.push(signal);
+    byFamily.set(family, bucket);
+  }
+  const signals: typeof pool = [];
+  let advanced = true;
+  while (signals.length < limit && advanced) {
+    advanced = false;
+    for (const [, bucket] of byFamily) {
+      if (signals.length >= limit) break;
+      if (bucket.length > 0) {
+        signals.push(bucket.shift()!);
+        advanced = true;
+      }
+    }
+  }
 
   // Log why each signal was selected (age, source, score) for auditability.
   if (logger) {
@@ -843,18 +866,44 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   }
   logger.log(`[scheduling] candidates=${candidates.length} selected=${clusters.length} families=[${familySizes}]`);
 
-  // ── AI budget: only deep-research the top-N most-ignored clusters ──
-  // The harvest + ranking are cheap (no LLM). Deep research is the expensive
-  // step, so it is bounded to deepResearchTopN and prioritised by ignored
-  // score (a large-but-underfollowed company outranks a heavily-covered one).
+  // ── AI budget: only deep-research the top-N clusters, with per-family
+  // quotas so no single source monopolizes the budget ──
+  // Deep research is the expensive step (LLM), bounded to deepResearchTopN.
+  // Rank each source family internally by ignored score (a large-but-
+  // underfollowed company outranks a heavily-covered one), then round-robin
+  // across families. This prevents a dominant family (e.g. regulatory/clinical,
+  // all scoring identically) from crowding out SEC — the previous pure-ignored-
+  // score sort let one family occupy 60 of 65 scheduled slots.
   const deepTopN = params?.deepResearchTopN ?? 20;
   const deferred: typeof clusters = [];
   let toEvaluate: typeof clusters = clusters;
   if (clusters.length > deepTopN) {
-    const ranked = [...clusters].sort((a, b) => clusterIgnoredScore(b) - clusterIgnoredScore(a));
-    toEvaluate = ranked.slice(0, deepTopN);
-    deferred.push(...ranked.slice(deepTopN));
-    logger.log(`[budget] deepResearchTopN=${deepTopN} evaluated=${toEvaluate.length} deferred=${deferred.length} (top ignored scores kept)`);
+    const byFamily = new Map<string, typeof clusters>();
+    for (const cluster of clusters) {
+      const family = sourceFamily(cluster.clusterType || '');
+      const bucket = byFamily.get(family) || [];
+      bucket.push(cluster);
+      byFamily.set(family, bucket);
+    }
+    for (const bucket of byFamily.values()) {
+      bucket.sort((a, b) => clusterIgnoredScore(b) - clusterIgnoredScore(a));
+    }
+    const families = [...byFamily.entries()].sort((a, b) => b[1].length - a[1].length);
+    toEvaluate = [];
+    let advanced = true;
+    while (toEvaluate.length < deepTopN && advanced) {
+      advanced = false;
+      for (const [, bucket] of families) {
+        if (toEvaluate.length >= deepTopN) break;
+        if (bucket.length > 0) {
+          toEvaluate.push(bucket.shift()!);
+          advanced = true;
+        }
+      }
+    }
+    deferred.push(...families.flatMap(([, bucket]) => bucket));
+    const kept = [...new Set(toEvaluate.map((c) => sourceFamily(c.clusterType || '')))].join(', ');
+    logger.log(`[budget] deepResearchTopN=${deepTopN} evaluated=${toEvaluate.length} deferred=${deferred.length} families=[${kept}]`);
   }
 
   const skippedFresh = await prisma.catalystCluster.count({
