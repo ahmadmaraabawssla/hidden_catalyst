@@ -454,7 +454,10 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     (input.signals.length > 0 ? 15 : 0) +
     (input.materiality.ratio != null ? 20 : 0) +
     (input.priceReactionAvailable ? 10 : 0) +
-    (input.attentionAvailable ? 10 : 0) -
+    // Only measured catalyst-specific attention is positive evidence. A
+    // market-cap-derived proxy ("no articles returned") is NOT proof of being
+    // overlooked — it is "unknown". Unknown must not raise confidence.
+    (input.attentionMeasured ? 10 : 0) -
     input.adversarial.confidencePenalty
   );
   const scenario = extractTrueUpScenario(combined);

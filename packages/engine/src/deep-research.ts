@@ -101,6 +101,67 @@ function unique(values: Array<string | undefined | null>) {
   return [...new Set(values.filter((value): value is string => !!value))];
 }
 
+/**
+ * Parse a dollar string the LLM may return ("$10 million", "$1,234,567", "$2B",
+ * "$3.2 billion", "1.5M", a bare number, or a number already) into a numeric
+ * USD amount. Returns null when the value is absent or unparseable. This is the
+ * bridge between the LLM's free-text financial materiality and the numeric
+ * materiality ratio — previously the LLM extracted `financialMateriality.amount`
+ * but the researcher only read `financialMateriality.amounts` (an array that
+ * never existed), so the dollar value was silently dropped and materiality was
+ * always UNKNOWN.
+ */
+function parseDollar(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const m = s.match(/\$?\s*([\d,]+(?:\.\d+)?)\s*(million|billion|trillion|m|b|t|k)?/i);
+  if (!m) return null;
+  const mantissa = m[1];
+  if (!mantissa) return null;
+  let n = Number(mantissa.replace(/,/g, ''));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = (m[2] || '').toLowerCase();
+  if (unit === 'trillion' || unit === 't') n *= 1e12;
+  else if (unit === 'billion' || unit === 'b') n *= 1e9;
+  else if (unit === 'million' || unit === 'm') n *= 1e6;
+  else if (unit === 'k') n *= 1e3;
+  return n;
+}
+
+/**
+ * Collect every dollar amount the LLM reported for a filing, from the
+ * financialMateriality block, the hidden-angle cash/dilution exposure, and the
+ * pass-1 extracted facts (maximumPaymentLiability, commitmentFee, etc.).
+ */
+function llmAmounts(extraction: Record<string, any> | null | undefined): Array<{ value: number; label: string; currency: string }> {
+  if (!extraction) return [];
+  const out: Array<{ value: number; label: string; currency: string }> = [];
+  const push = (value: unknown, label: string) => {
+    const n = parseDollar(value);
+    if (n != null) out.push({ value: n, label, currency: 'USD' });
+  };
+
+  const fm = extraction.financialMateriality;
+  if (fm && typeof fm === 'object') push(fm.amount, 'financial_materiality');
+
+  const ha = extraction.hiddenAngle;
+  if (ha && typeof ha === 'object') {
+    if (ha.cashExposure && typeof ha.cashExposure === 'object') push(ha.cashExposure.amount, 'cash_exposure');
+    if (ha.dilutionExposure && typeof ha.dilutionExposure === 'object') push(ha.dilutionExposure.potentialShares, 'dilution_shares');
+  }
+
+  const facts = extraction.extractedFacts;
+  if (facts && typeof facts === 'object') {
+    push(facts.maximumPaymentLiability, 'maximum_payment_liability');
+    push(facts.elocMaxCapacity, 'equity_line_max');
+    push(facts.commitmentFee, 'commitment_fee');
+  }
+
+  return out;
+}
+
 function firstSignal(context: DeepResearchContext, pattern: RegExp) {
   return context.signals.find((signal) => pattern.test(signal.sourceType));
 }
@@ -198,7 +259,10 @@ export class SecDeepResearcher implements DeepResearcher {
         filingText.length < 200 ? 'Full SEC filing text could not be retrieved.' : null,
       ]),
       openQuestions: Array.isArray(extraction?.openQuestions) ? extraction.openQuestions.map(String) : [],
-      amounts: [...context.signals.flatMap(amountList), ...((extraction?.financialMateriality?.amounts || []) as any[])].filter((item: any) => Number(item?.value || 0) > 0),
+      amounts: [
+        ...context.signals.flatMap(amountList),
+        ...llmAmounts(extraction),
+      ].filter((item: any) => Number(item?.value || 0) > 0),
       relationshipConfidence: Number(extraction?.relationshipConfidence || 90),
       attributes: { formType: metadata.formType, accessionNumber: metadata.accessionNumber, filingTextLength: filingText.length, resolvedTerms, extraction },
       evidenceUrls: unique([signal.sourceUrl, textUrl]),

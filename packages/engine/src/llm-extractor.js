@@ -69,8 +69,9 @@ function pass2Prompt(text, company, ticker, form, profile, factsStr, companyCont
     'You are Hidden Catalyst — an investigative financial intelligence system.',
     'Your job: determine if this '+form+' from '+company+' ('+ticker+') contains a HIDDEN opportunity.',
     '',
-    'CRITICAL DEFAULT: "NO_HIDDEN_ANGLE" is the correct answer for most filings.',
-    'Only flag concrete, evidence-backed, non-obvious insights.',
+    'Most filings ARE routine — say so honestly when they are.',
+    'But your job is to surface the minority with a CONCRETE, evidence-backed, non-obvious angle.',
+    'When you find a real angle, be specific: name the dollar amount, clause, or event. Do not hedge.',
     '',
     '=== EPISTEMIC DISCIPLINE HARD RULES ===',
     'Never say more than the evidence proves.',
@@ -153,17 +154,18 @@ function pass2Prompt(text, company, ticker, form, profile, factsStr, companyCont
     'insightTitle: "TICKER: specific insight." NOT "[8-K] Company Name" or truncated text.',
     'Example: "Issuer filing adds a material financing obligation tied to a contractual price threshold"',
     '',
-    '=== VERIFICATION GATE ===',
-    'verificationConfidence >= 0.85: thresholds resolved, market data cross-referenced, cross-refs resolved → verified',
-    'verificationConfidence 0.7-0.85: interesting but missing context → candidate',
-    'verificationConfidence < 0.7: interesting direction, needs investigation → watch',
-    'Most first-pass analyses should be candidate or watch.',
-    'Only mark verified when ALL cross-references are resolved and current data integrated.',
+    '=== CONFIDENCE ===',
+    'verificationConfidence is HOW SURE YOU ARE of your hidden angle, given THIS filing\'s evidence.',
+    '0.85+ = the angle is concrete and backed by explicit dollar amounts or clauses',
+    '0.6-0.85 = a real angle, but some context is missing',
+    'below 0.6 = speculative direction only',
+    'Do NOT lower confidence just because you could not cross-reference external market data —',
+    'confidence is about the evidence IN the filing, not external verification.',
     '',
     'Return JSON:',
     '{',
-    '  "shouldQualify": true/false,',
-    '  "isRoutine": true/false,',
+    '  "shouldQualify": true when a concrete hidden angle is found, otherwise false,',
+    '  "isRoutine": true ONLY when there is NO hidden angle. If hiddenAngle is present, isRoutine MUST be false,',
     '  "insightTitle": "TICKER: one-line discovery",',
     '  "whyItMatters": "2-3 sentence financial explanation",',
     '  "hiddenAngle": {',
@@ -203,13 +205,26 @@ async function extractFromFiling(filingText, companyName, ticker, formType, sect
   var facts = await callAI([{role:'system',content:'Extract structured financial facts. Return JSON only. Never fabricate.'},{role:'user',content:pass1Prompt(filingText,companyName,ticker,formType,profile)}],25000);
   if(!facts){return null}
   console.log('  [LLM v3] '+ticker+': Pass 2 — hidden angle...');
-  var a = await callAI([{role:'system',content:'You are a critical financial researcher. Default answer: NO_HIDDEN_ANGLE. Only flag concrete evidence-backed insights. Follow the evidence chain — do not stop because one document lacks information.'},{role:'user',content:pass2Prompt(filingText,companyName,ticker,formType,profile,JSON.stringify(facts),companyContext)}],35000);
+  var a = await callAI([{role:'system',content:'You are a critical financial researcher. Most filings ARE routine — say so honestly. But do not default to "routine" when the filing contains a concrete, material, non-obvious development. When you find a real angle, describe it specifically (exact dollar amount, clause, or event) with high confidence.'},{role:'user',content:pass2Prompt(filingText,companyName,ticker,formType,profile,JSON.stringify(facts),companyContext)}],35000);
   if(!a){return null}
-  var qualified = a.shouldQualify===true&&a.hiddenAngle!=null&&!a.isRoutine;
-  var verConf = a.verificationConfidence||a.hiddenAngle?.confidence||0.7;
-  var ha = a.hiddenAngle||null;
-  var verification = qualified ? (verConf >= 0.85 ? 'verified' : 'candidate') : (a.isRoutine ? 'rejected' : 'watch');
-  var title = a.insightTitle || (ha ? (ticker+': '+ha.claim.slice(0,80)) : ('['+formType+'] '+companyName));
+  var ha = a.hiddenAngle || null;
+  // ── Resolve the routine/hidden contradiction correctly ──
+  // The model is primed toward "routine" and sometimes stuffs a BOILERPLATE
+  // claim ("No hidden angle found; the filing is routine.") into the
+  // hiddenAngle field while also setting shouldQualify=false and isRoutine=true.
+  // That is NOT a concrete angle — it is a negative verdict in disguise.
+  // A real angle must be (a) non-boilerplate and (b) explicitly qualified.
+  var claimText = ha && typeof ha.claim === 'string' ? ha.claim.trim() : '';
+  var isBoilerplate = /no hidden angle|no material|routine|nothing material|no significant|not material|no material items|no material obligation|\bn\/?a\b/i.test(claimText);
+  var hasConcreteAngle = claimText.length >= 20 && !isBoilerplate;
+  var isRoutine = a.isRoutine === true;
+  // The model's explicit verdict is authoritative: shouldQualify must be true
+  // AND the angle must be concrete (not boilerplate). We never manufacture a
+  // qualification from a routine filing.
+  var qualified = a.shouldQualify === true && hasConcreteAngle;
+  var verConf = a.verificationConfidence || (ha && typeof ha.confidence === 'number' ? ha.confidence : (qualified ? 0.7 : 0.35));
+  var verification = qualified ? (verConf >= 0.85 ? 'verified' : 'candidate') : (isRoutine ? 'rejected' : 'watch');
+  var title = a.insightTitle || (ha && hasConcreteAngle ? (ticker+': '+ha.claim.slice(0,80)) : ('['+formType+'] '+companyName));
 
   // Convert new structured facts format
   var factsArray = [];
@@ -229,8 +244,16 @@ async function extractFromFiling(filingText, companyName, ticker, formType, sect
     factsArray = Object.entries(facts||{}).filter(function(e){return e[1]!=null&&e[1]!==''}).map(function(e){return e[0]+': '+e[1]});
   }
 
-  console.log('  [LLM v3] '+ticker+': routine='+a.isRoutine+' hidden='+(ha!=null)+' qualify='+qualified+' verConf='+verConf.toFixed(2)+' → '+verification);
-  return {
+  console.log('  [LLM v3] '+ticker+': routine='+a.isRoutine+' hidden='+(ha!=null)+' qualify='+qualified+' verConf='+verConf.toFixed(2)+' → '+verification);  // ── Raw-output observability ──
+  // Log the model's actual fields (not just the resolved verdict) so a reviewer
+  // can tell whether a suspiciously-uniform result (e.g. "5/5 routine=true
+  // hidden=true verConf=0.10") is real LLM output or a default/fallback path.
+  // The claim is truncated to avoid flooding logs but retains the signal of
+  // whether the model produced a concrete angle vs a boilerplate one.
+  var rawClaim = ha && ha.claim ? String(ha.claim).slice(0, 100).replace(/\s+/g,' ') : '';
+  var rawMat = a.financialMateriality ? JSON.stringify(a.financialMateriality).slice(0, 140) : 'null';
+  console.log('  [LLM raw] '+ticker+': isRoutine='+JSON.stringify(a.isRoutine)+' shouldQualify='+JSON.stringify(a.shouldQualify)+' verConf='+JSON.stringify(a.verificationConfidence)+' mat='+rawMat);
+  if (rawClaim) console.log('  [LLM raw] '+ticker+': claim="'+rawClaim+'"');  return {
     eventType:'other',
     eventSummary:title,
     verifiedFacts:factsArray,
@@ -241,7 +264,7 @@ async function extractFromFiling(filingText, companyName, ticker, formType, sect
     confidence:verConf,
     qualified:qualified,
     hiddenAngle:ha,
-    isRoutine:a.isRoutine,
+    isRoutine:isRoutine,
     contradictions:a.contradictions||[],
     missingInfo:a.missingInfo||[],
     openQuestions:a.openQuestions||[],

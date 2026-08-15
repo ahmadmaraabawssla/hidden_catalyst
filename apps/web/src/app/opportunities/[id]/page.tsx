@@ -204,7 +204,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             <p className="text-sm text-gray-700">
               {attention.measured
                 ? `Yes — we found ${attention.news.count} news mentions in the last week, so it may already be on people's radar.`
-                : 'Little to none observed. Whether that matters depends on how big this is for the company — low coverage of a negligible event is just the market being efficient.'}
+                : 'We haven\'t been able to measure catalyst-specific coverage — so we treat attention as unknown, not as "overlooked".'}
             </p>
           </div>
         )}

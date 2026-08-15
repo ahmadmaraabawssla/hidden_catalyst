@@ -956,6 +956,48 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   }
 
   logger.log(`[engine] pass complete evaluated=${evaluated.length} deferred=${deferred.length} skippedFresh=${skippedFresh}`);
+
+  // ── Per-source funnel report ──
+  // For every source family, report the whole funnel so a reviewer can see
+  // WHERE signals are lost: harvested → eligible (≥ minPriority) → triaged →
+  // scheduled → researched → qualified vs rejected. This turns "ClinicalTrials
+  // produced 56 docs but 0 reached research" from a mystery into an auditable
+  // number per stage.
+  const harvested = await prisma.signal.findMany({
+    where: { retrievedAt: { gte: new Date(Date.now() - 48 * 3600_000) } },
+    select: { sourceType: true, triageScore: true },
+  });
+  const minPri = params?.minPriority ?? 55;
+  const famStats = new Map<string, { harvested: number; eligible: number }>();
+  for (const s of harvested) {
+    const fam = sourceFamily(s.sourceType || '');
+    const entry = famStats.get(fam) || { harvested: 0, eligible: 0 };
+    entry.harvested++;
+    if ((s.triageScore ?? 0) >= minPri) entry.eligible++;
+    famStats.set(fam, entry);
+  }
+  const triagedMap = new Map<string, number>();
+  for (const c of clusters) {
+    for (const cs of c.signals) {
+      const fam = sourceFamily(cs.signal.sourceType || '');
+      triagedMap.set(fam, (triagedMap.get(fam) || 0) + 1);
+    }
+  }
+  const scheduledMap = new Map<string, number>();
+  for (const c of clusters) {
+    const fam = sourceFamily(c.clusterType || '');
+    scheduledMap.set(fam, (scheduledMap.get(fam) || 0) + 1);
+  }
+  const researchedMap = new Map<string, number>();
+  for (const c of toEvaluate) {
+    const fam = sourceFamily(c.clusterType || '');
+    researchedMap.set(fam, (researchedMap.get(fam) || 0) + 1);
+  }
+  for (const fam of [...famStats.keys()].sort()) {
+    const st = famStats.get(fam)!;
+    logger.log(`[funnel] family=${fam} harvested48h=${st.harvested} eligible(>=${minPri})=${st.eligible} triaged=${triagedMap.get(fam) || 0} scheduled=${scheduledMap.get(fam) || 0} researched=${researchedMap.get(fam) || 0}`);
+  }
+
   return { triage, evaluated: evaluated.length, deferred: deferred.length, skippedFresh, logs };
 }
 
