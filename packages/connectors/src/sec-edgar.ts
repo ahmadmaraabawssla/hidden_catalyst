@@ -8,6 +8,7 @@
 
 import { BaseConnector, type RawDocument, type ExtractionResult } from './base';
 import { computeIgnoredScore } from '@hidden-catalyst/domain';
+import { countNews7d } from './news-count';
 import type { PrismaClient } from '@hidden-catalyst/db';
 
 export class SECEdgarConnector extends BaseConnector {
@@ -27,14 +28,15 @@ export class SECEdgarConnector extends BaseConnector {
     const maxCompanies = Number(process.env.SEC_SCAN_LIMIT || 500);
     const minIgnoredScore = Number(process.env.SCAN_MIN_IGNORED_SCORE || 0);
     const minMarketCap = Number(process.env.SEC_MIN_MARKET_CAP || 10_000_000);
+    const detectLimit = Number(process.env.SEC_DETECT_LIMIT || 8000);
 
-    // ── Universe selection: "most ignored", not "smallest" ──
-    // Skip micro-junk (below the floor) but deliberately do NOT cap the top end:
-    // a large but underfollowed company (RKLB) is exactly the point. We fetch a
-    // candidate pool, rank by computeIgnoredScore() (news + volume + cap), and
-    // keep the top SEC_SCAN_LIMIT. This replaces the old "500 smallest by cap"
-    // behavior which filled the whole budget with sub-$100M shells.
-    const candidates = await this.prisma.company.findMany({
+    // ── Two-stage: DETECT first (cheap), then SCORE only the shortlist ──
+    // Stage 1 detects "which companies filed something material recently" for
+    // the whole universe (bounded by SEC_DETECT_LIMIT). Stage 2 fetches the
+    // news count ONLY for companies that actually filed something, computes the
+    // ignored score with real news data, and ranks. This avoids a 7,900-company
+    // news backfill and puts the expensive/finite signal where it matters.
+    const universe = await this.prisma.company.findMany({
       where: {
         cik: { not: null },
         securities: {
@@ -54,38 +56,28 @@ export class SECEdgarConnector extends BaseConnector {
           take: 1,
         },
       },
+      take: detectLimit,
     });
 
-    const ranked = candidates
-      .map((company) => {
-        const sec = company.securities[0];
-        const attrs = (sec?.attributes ?? {}) as Record<string, unknown>;
-        const ignoredScore = computeIgnoredScore({
-          news7d: toNumber(attrs.news_7d),
-          avgDollarVolume: sec?.avgDollarVolume ?? toNumber(attrs.avg_dollar_volume),
-          marketCap: sec?.marketCap ?? toNumber(attrs.market_cap),
-          analystCount: toNumber(attrs.analyst_count),
-          instOwnershipPct: toNumber(attrs.inst_ownership),
-        });
-        return { company, ignoredScore, security: sec };
-      })
-      .filter((r) => r.ignoredScore >= minIgnoredScore)
-      .sort((a, b) => b.ignoredScore - a.ignoredScore)
-      .slice(0, maxCompanies);
-
-    if (ranked.length === 0) {
-      console.log('[SEC EDGAR] No companies passed the ignored-score filter.');
-      return [];
-    }
-
-    console.log(`[SEC EDGAR] Scanning ${ranked.length} most-ignored companies (floor $${(minMarketCap / 1e6).toFixed(0)}M, minIgnoredScore ${minIgnoredScore})...`);
-
     const materialForms = new Set(['8-K', '10-Q', '10-K', 'S-1', '13D', '13G']);
-    const skipForms = new Set(['3', '4', '5', '3/A', '4/A', '144', 'N-PX', 'NPORT-P', 'N-CSR', 'N-CSRS', '6-K', 'ARS', 'CERT', '25', '8-A12B', 'PX14A6G', 'S-8', '424B2', 'FWP', '25-NSE', 'SD']);
-    const documents: RawDocument[] = [];
+    const skipForms = new Set(['3', '4', '5', '3/A', '4/A', '144', 'N-PX', 'NPORT-P', 'N-CSR', 'N-CSRS', '6-K', 'ARS', 'CERT', '25', '8-A12B', 'PX14A6G', 'S-8', '424B2', 'FWP', '25-NSE', '25', 'SD']);
 
-    for (const { company, ignoredScore, security } of ranked) {
+    console.log(`[SEC EDGAR] Detect stage: checking ${universe.length} companies for recent material filings...`);
+
+    // Stage 1: detect filings (no news fetch yet)
+    const detected: Array<{
+      company: (typeof universe)[number];
+      security: NonNullable<(typeof universe)[number]['securities'][number]>;
+      cik: string;
+      form: string;
+      filedDate: Date;
+      accession: string;
+    }> = [];
+
+    for (const company of universe) {
       const cik = String(company.cik).padStart(10, '0');
+      const security = company.securities[0];
+      if (!security) continue;
       try {
         const response = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
           headers: {
@@ -111,26 +103,7 @@ export class SECEdgarConnector extends BaseConnector {
           const filedDate = new Date(filed);
           if (filedDate < sinceDate) continue;
 
-          const accession = recent.accessionNumber[i] || '';
-          const attrs = (security?.attributes ?? {}) as Record<string, unknown>;
-          documents.push({
-            canonicalUrl: `https://www.sec.gov/Archives/edgar/data/${cik}/${accession.replace(/-/g, '')}/${accession}.txt`,
-            title: `Form ${form} — ${company.displayName}`,
-            text: '',
-            publishedAt: filedDate,
-            metadata: {
-              cik,
-              accessionNumber: accession,
-              formType: form,
-              displayName: company.displayName,
-              ticker: security?.ticker || null,
-              exchange: security?.exchange || null,
-              marketCap: security?.marketCap ?? null,
-              avgDollarVolume: security?.avgDollarVolume ?? null,
-              news7d: toNumber(attrs.news_7d),
-              ignoredScore,
-            },
-          });
+          detected.push({ company, security, cik, form, filedDate, accession: recent.accessionNumber[i] || '' });
           break;
         }
 
@@ -140,13 +113,72 @@ export class SECEdgarConnector extends BaseConnector {
       }
     }
 
-    console.log(`[SEC EDGAR] Found ${documents.length} recent filings`);
-    return documents;
+    console.log(`[SEC EDGAR] Detected ${detected.length} companies with recent filings. Scoring news coverage...`);
+
+    // Stage 2: fetch news count ONLY for the detected shortlist, rank by
+    // ignored score (now with real news data), keep top SEC_SCAN_LIMIT.
+    const hasFinnhub = !!process.env.FINNHUB_API_KEY;
+    const scored = [];
+    for (const d of detected) {
+      let news7d: number | null = null;
+      if (hasFinnhub) {
+        const nc = await countNews7d(d.security.ticker || '', []);
+        news7d = nc.available ? nc.total7d : null;
+        await this.newsThrottle();
+      }
+      const attrs = (d.security.attributes ?? {}) as Record<string, unknown>;
+      const ignoredScore = computeIgnoredScore({
+        news7d: news7d ?? toNumber(attrs.news_7d),
+        avgDollarVolume: d.security.avgDollarVolume ?? toNumber(attrs.avg_dollar_volume),
+        marketCap: d.security.marketCap ?? toNumber(attrs.market_cap),
+        analystCount: toNumber(attrs.analyst_count),
+        instOwnershipPct: toNumber(attrs.inst_ownership),
+      });
+      scored.push({ ...d, news7d, ignoredScore });
+    }
+
+    scored
+      .sort((a, b) => b.ignoredScore - a.ignoredScore);
+
+    const ranked = scored
+      .filter((r) => r.ignoredScore >= minIgnoredScore)
+      .slice(0, maxCompanies);
+
+    if (ranked.length === 0) {
+      console.log('[SEC EDGAR] No companies passed the ignored-score filter.');
+      return [];
+    }
+
+    console.log(`[SEC EDGAR] Emitting ${ranked.length} most-ignored filings (of ${detected.length} detected)`);
+
+    return ranked.map((d) => ({
+      canonicalUrl: `https://www.sec.gov/Archives/edgar/data/${d.cik}/${d.accession.replace(/-/g, '')}/${d.accession}.txt`,
+      title: `Form ${d.form} — ${d.company.displayName}`,
+      text: '',
+      publishedAt: d.filedDate,
+      metadata: {
+        cik: d.cik,
+        accessionNumber: d.accession,
+        formType: d.form,
+        displayName: d.company.displayName,
+        ticker: d.security.ticker || null,
+        exchange: d.security.exchange || null,
+        marketCap: d.security.marketCap ?? null,
+        avgDollarVolume: d.security.avgDollarVolume ?? null,
+        news7d: d.news7d,
+        ignoredScore: d.ignoredScore,
+      },
+    }));
   }
 
   private throttle(): Promise<void> {
     // SEC requires ≤10 requests/sec; use a conservative 100ms spacing.
     return new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  private newsThrottle(): Promise<void> {
+    // Finnhub free = 60 calls/min; use ~1/sec to stay well under.
+    return new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
   async extract(doc: RawDocument): Promise<ExtractionResult> {

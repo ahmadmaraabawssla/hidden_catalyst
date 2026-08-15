@@ -28,6 +28,7 @@ export async function runIntelligenceEngine() {
   const testMode = process.env.ENGINE_TEST_MODE === '1';
   if (testMode) {
     process.env.SEC_SCAN_LIMIT ??= '30';
+    process.env.SEC_DETECT_LIMIT ??= '80';
     process.env.SIGNAL_LIMIT ??= '5';
     process.env.MIN_RESEARCH_PRIORITY ??= '40';
     process.env.MONITOR_LIMIT ??= '10';

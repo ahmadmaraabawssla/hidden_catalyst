@@ -30,13 +30,16 @@ export function computeIgnoredScore(input: IgnoredInput): number {
   let score = 0;
 
   // 1. News coverage (strongest signal: no news = hidden)
+  // Calibrated against real Finnhub data: mega-caps ~230-250 articles/7d,
+  // a "hot" mid-cap ~120, an ordinary mid-cap ~40, and an ignored name 0-10.
   const news = input.news7d;
   if (news != null) {
-    if (news === 0) score += 40;
-    else if (news <= 3) score += 28;
-    else if (news <= 10) score += 14;
-    else if (news <= 25) score += 5;
-    // > 25 news: heavily covered, no points
+    if (news === 0) score += 45;
+    else if (news <= 5) score += 38;
+    else if (news <= 15) score += 28;
+    else if (news <= 40) score += 15;
+    else if (news <= 100) score += 5;
+    // > 100 news: heavily covered, no points
   }
 
   // 2. Trading attention (low dollar volume = thin market, fewer eyes)
