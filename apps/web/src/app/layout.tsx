@@ -27,14 +27,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </svg>
             </label>
             <div className="hidden lg:flex items-center gap-6 text-sm font-medium text-gray-600">
-              <a href="/feed" className="hover:text-brand-700 transition-colors">Feed</a>
+              <a href="/feed" className="hover:text-brand-700 transition-colors">Discoveries</a>
               <a href="/search" className="hover:text-brand-700 transition-colors">Search</a>
               <a href="/watchlists" className="hover:text-brand-700 transition-colors">Watchlists</a>
               <a href="/methodology" className="hover:text-brand-700 transition-colors">Methodology</a>
             </div>
             {/* Mobile dropdown */}
             <div className="peer-checked:flex hidden absolute top-16 left-0 right-0 bg-white border-b border-gray-200 flex-col p-4 gap-3 text-sm font-medium text-gray-600 lg:hidden shadow-lg">
-              <a href="/feed" className="hover:text-brand-700 py-2">Feed</a>
+              <a href="/feed" className="hover:text-brand-700 py-2">Discoveries</a>
               <a href="/search" className="hover:text-brand-700 py-2">Search</a>
               <a href="/watchlists" className="hover:text-brand-700 py-2">Watchlists</a>
               <a href="/methodology" className="hover:text-brand-700 py-2">Methodology</a>

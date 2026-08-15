@@ -412,3 +412,20 @@ export async function getEngineOpportunity(id: string): Promise<OpportunityResea
     await client.end().catch(() => undefined);
   }
 }
+
+/** When the engine last finished a run (newest signal.retrieved_at or ingestion run). */
+export async function getLastEngineRun(): Promise<string | null> {
+  const client = pgClient();
+  try {
+    await client.connect();
+    const res = await client.query(
+      `SELECT MAX(retrieved_at) AS last_run FROM signals`
+    );
+    const val = res.rows[0]?.last_run as string | null | undefined;
+    return val ? String(val) : null;
+  } catch {
+    return null;
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
