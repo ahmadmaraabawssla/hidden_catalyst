@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { getEngineOpportunity } from '@/lib/engine-data';
-import { formatMC, formatPrice, formatPct, formatDate, formatMoney, cleanCompanyName, formatRatio, relativeTime, plainMateriality, plainDirection } from '@/components/research/format';
+import { formatMC, formatPrice, formatPct, formatDate, formatMoney, cleanCompanyName, formatRatio, relativeTime, plainMateriality, plainDirection, plainConfidence } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,6 +53,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const confidence = opp.confidence ?? report?.confidence ?? 0;
   const dir = plainDirection(report?.direction ?? 'unclear');
   const matPlain = plainMateriality(mat?.level);
+  const confPlain = plainConfidence(confidence);
 
   return (
     <div className="page-container">
@@ -89,6 +90,14 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             : 'bg-gray-100 text-gray-700'
           }`}>
             {dir.emoji} {dir.label}
+          </span>
+          {mat && mat.level !== 'UNKNOWN' && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-3 py-1 text-sm font-medium text-gray-700">
+              Materiality: {matPlain.label}
+            </span>
+          )}
+          <span title={confPlain.tone} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-3 py-1 text-sm font-medium text-gray-700">
+            Confidence: {confPlain.label}
           </span>
           <span className="text-xs text-gray-400">detected {relativeTime(opp.detectedAt)}</span>
         </div>

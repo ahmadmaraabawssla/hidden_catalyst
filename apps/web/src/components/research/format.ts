@@ -133,9 +133,9 @@ export function plainDirection(direction: string | null | undefined): { label: s
 export function plainMateriality(level: string | null | undefined): { label: string; tone: string } {
   switch (level) {
     case 'EXTREME':
-      return { label: 'Very big', tone: 'This is huge relative to the company\'s size.' };
+      return { label: 'High', tone: 'This is huge relative to the company\'s size.' };
     case 'HIGH':
-      return { label: 'Big', tone: 'This is a significant deal for this company.' };
+      return { label: 'High', tone: 'This is a significant deal for this company.' };
     case 'MODERATE':
       return { label: 'Meaningful', tone: 'This is noticeable, but not transformative.' };
     case 'LOW':
@@ -147,6 +147,14 @@ export function plainMateriality(level: string | null | undefined): { label: str
     default:
       return { label: '—', tone: '' };
   }
+}
+
+/** Plain-English research confidence (High / Medium / Low). */
+export function plainConfidence(confidence: number | null | undefined): { label: string; tone: string } {
+  const c = confidence ?? 0;
+  if (c >= 70) return { label: 'High', tone: 'We\'re fairly sure of this assessment.' };
+  if (c >= 40) return { label: 'Medium', tone: 'A reasonable read, but there are open questions.' };
+  return { label: 'Low', tone: 'Speculative — treat it as a lead, not a conclusion.' };
 }
 
 /** Discovery delay: days between the source publishing and us first seeing it. */

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getEngineOpportunities, getLastEngineRun, getEngineCounts } from '@/lib/engine-data';
-import { formatMC, formatPrice, cleanCompanyName, formatRatio, relativeTime, plainMateriality, plainDirection, isStale, discoveryDelayDays } from '@/components/research/format';
+import { formatMC, formatPrice, cleanCompanyName, formatRatio, relativeTime, plainMateriality, plainDirection, plainConfidence, isStale, discoveryDelayDays } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -82,6 +82,8 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
             const attention = opp.attention;
             const priceReaction = opp.priceReaction;
             const completeness = opp.researchCompleteness ?? opp.report?.completeness ?? 0;
+            const confidence = opp.confidence ?? opp.report?.confidence ?? 0;
+            const confPlain = plainConfidence(confidence);
             const facts = opp.report?.verifiedFacts.length ?? 0;
             const delayDays = discoveryDelayDays(opp.eventDate, opp.detectedAt);
             const backfilled = delayDays != null && delayDays > 7;
@@ -119,6 +121,10 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                     : 'bg-gray-100 text-gray-700'
                   }`}>
                     {dir.emoji} {dir.label}
+                  </span>
+
+                  <span title={confPlain.tone} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-700">
+                    Confidence: {confPlain.label}
                   </span>
 
                   {mat && mat.level !== 'UNKNOWN' && (
