@@ -7,6 +7,7 @@ import {
   type ResearchPriorityInput,
 } from '@hidden-catalyst/domain';
 import { computeMateriality, extractLargestAmount } from './materiality';
+import { resolvePublicSecurity } from './public-security';
 import { enrichFinancialDenominators } from './market-data';
 import { measureAttention } from './catalyst-attention';
 import { fetchPriceReaction } from './price-reaction';
@@ -38,34 +39,6 @@ function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-/**
- * Normalize a company name for matching: lowercase, strip punctuation and
- * common legal suffixes, so "CorVista Medical, Inc." ≈ "corvistamedical".
- * Returns null if the resulting stem is too short to be a safe match key.
- */
-function normalizeCompanyName(name: unknown): string | null {
-  let stem = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-  // Strip leading definite article ("THE BOEING COMPANY" → "boeingcompany").
-  stem = stem.replace(/^the/, '');
-  // Strip trailing legal suffixes repeatedly (handles stacked "Inc. Co." etc).
-  const suffixes = [
-    'incorporated', 'corporation', 'company', 'limited', 'holdings', 'holding',
-    'group', 'inc', 'corp', 'llc', 'ltd', 'plc', 'co', 'sa', 'ag', 'nv', 'gmbh', 'spa',
-    'adr', 'fi', // EDGAR foreign-issuer markers ("PLC /FI/", "(ADR)")
-  ];
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const suffix of suffixes) {
-      if (stem.endsWith(suffix)) {
-        stem = stem.slice(0, -suffix.length);
-        changed = true;
-      }
-    }
-  }
-  return stem.length >= 3 ? stem : null;
 }
 
 /**
@@ -530,71 +503,23 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   const ticker = signalEntities.map((entity) => entity?.identifiers?.ticker).find(Boolean);
   const companyName = signalEntities.find((entity) => entity?.type === 'company')?.name;
 
-  // ── Entity resolution: ticker → cik → exact name → normalized name ──
-  let security = null;
-  if (ticker) {
+  // ── Entity resolution: graph-based, with confidence tiers ──
+  // Resolve the source entity (sponsor/assignee/recipient) to a listed parent
+  // security via ticker → cik → exact → normalized → alias → subsidiary → fuzzy.
+  // The tier is logged and enforced: only 'verified'/'strong'/'probable' proceed
+  // to deep research; 'unresolved' skips the opportunity entirely.
+  const resolution = await resolvePublicSecurity({ ticker, cik, companyName });
+  let security: { id: string; ticker: string; companyId: string; marketCap: number | null; attributes: unknown; company: { id: string; displayName: string; legalName: string | null; cik: string | null; sector: string | null } } | null = null;
+  if (resolution.securityId) {
     security = await prisma.security.findFirst({
-      where: { ticker: String(ticker).toUpperCase(), active: true },
+      where: { id: resolution.securityId, active: true },
       include: { company: true },
     });
   }
-  if (!security && cik) {
-    security = await prisma.security.findFirst({
-      where: { company: { cik: String(cik).padStart(10, '0') }, active: true },
-      include: { company: true },
-    });
-  }
-  if (!security && companyName) {
-    // Exact-ish match on displayName or legalName
-    security = await prisma.security.findFirst({
-      where: {
-        active: true,
-        company: {
-          OR: [
-            { displayName: { equals: String(companyName), mode: 'insensitive' } },
-            { legalName: { equals: String(companyName), mode: 'insensitive' } },
-          ],
-        },
-      },
-      include: { company: true },
-    });
-  }
-  if (!security && companyName) {
-    // Normalized-stem match against displayName / legalName.
-    const stem = normalizeCompanyName(companyName);
-    if (stem) {
-      const candidates = await prisma.security.findMany({
-        where: { active: true },
-        select: { id: true, ticker: true, company: { select: { displayName: true, legalName: true } } },
-      });
-      let matched: (typeof candidates)[number] | undefined;
-      let matchKind: 'exact' | 'subsidiary' = 'exact';
-      // Tier 1: exact normalized-stem match.
-      matched = candidates.find((candidate) =>
-        normalizeCompanyName(candidate.company.displayName) === stem ||
-        normalizeCompanyName(candidate.company.legalName) === stem
-      );
-      // Tier 2: subsidiary/prefix match — one stem is a prefix of the other,
-      // e.g. "BAE Systems Space & Mission Systems Inc" → "BAE Systems PLC".
-      // Requires a >=6-char shared prefix to avoid false positives.
-      if (!matched && stem.length >= 6) {
-        matched = candidates.find((candidate) => {
-          const cs = normalizeCompanyName(candidate.company.displayName) ||
-            normalizeCompanyName(candidate.company.legalName);
-          if (!cs) return false;
-          const shorter = cs.length < stem.length ? cs : stem;
-          return shorter.length >= 6 && (stem.startsWith(cs) || cs.startsWith(stem));
-        });
-        if (matched) matchKind = 'subsidiary';
-      }
-      if (matched) {
-        security = await prisma.security.findFirst({
-          where: { id: matched.id, active: true },
-          include: { company: true },
-        });
-        logger.log(`[research] cluster=${clusterId} entity_resolved=${String(companyName)} → ${matched.ticker} via ${matchKind === 'exact' ? 'normalized name' : 'subsidiary name'}`);
-      }
-    }
+  if (resolution.tier !== 'unresolved' && security) {
+    logger.log(`[research] cluster=${clusterId} entity_resolved="${String(companyName)}" → ${security.ticker} tier=${resolution.tier} matchedBy=${resolution.matchedBy}`);
+  } else if (resolution.tier === 'unresolved') {
+    logger.log(`[research] cluster=${clusterId} entity_resolution=unresolved name="${String(companyName)}" — no listed parent found (sponsor/subsidiary/product may be non-public)`);
   }
   const securityAttributes = jsonObject(security?.attributes);
   // Financial denominators (revenue/cash/assets/shares) drive materiality.
@@ -663,6 +588,19 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     ...cluster.signals.flatMap(({ signal }) => (Array.isArray(signal.amounts) ? signal.amounts as Array<{ value?: number }> : [])).map((amount) => Number(amount.value || 0)),
     ...deepResearch.amounts.map((amount) => amount.value),
   ) || null;
+
+  // ── Clinical metadata (source-specific materiality) ──
+  // Extract phase / enrollment / status from the signal's rawMetadata so a
+  // clinical trial is assessed on its stage & status change — NOT a dollar
+  // amount (there isn't one). This lets a Phase 3 status change at a
+  // pre-revenue biotech clear materiality without forcing "market opp / EV".
+  const clinicalMeta = cluster.signals
+    .map(({ signal }) => jsonObject(signal.rawMetadata))
+    .find((meta) => meta.phase || meta.enrollment || meta.status || meta.nctId) ?? {};
+  const clinicalPhase = (clinicalMeta.phase as string) || null;
+  const enrollment = Number(clinicalMeta.enrollment) || null;
+  const clinicalStatus = (clinicalMeta.status as string) || null;
+
   const materiality = computeMateriality({
     eventType: cluster.clusterType,
     amount: largestAmount,
@@ -671,6 +609,9 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     assets: companyContext.assets,
     enterpriseValue: companyContext.enterpriseValue,
     currentShares: companyContext.currentShares,
+    clinicalPhase,
+    enrollment,
+    clinicalStatus,
     eventDate: primary?.publishedAt ?? null,
   });
   const adversarial = runDeterministicAdversarialCheck({
@@ -880,9 +821,17 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   const staleBefore = new Date(Date.now() - freshnessHours * 3600_000);
 
   const clusterLimit = params?.signalLimit ?? 100;
-  // Fetch a larger candidate pool than the budget so diversity filtering has
-  // enough material to round-robin across source families.
-  const candidates = await prisma.catalystCluster.findMany({
+  // ── Per-family candidate pool ──
+  // The old `take clusterLimit*4` global fetch (ordered by firstSeenAt desc)
+  // let the most frequently harvested family (SEC) fill the entire candidate
+  // pool before older clusters from other families (clinical/contracts) were
+  // even loaded — so a never-evaluated clinical cluster could be silently
+  // pushed out of the top-N window by a flood of fresher SEC clusters, and
+  // "2 regulatory signals triaged → only 1 researched". Fetch ALL eligible
+  // clusters (the table is small), bucket by family in JS, then round-robin so
+  // every family with eligible candidates is represented. Within a family the
+  // scheduling order (never-evaluated first, then stale) is preserved.
+  const allCandidates = await prisma.catalystCluster.findMany({
     where: {
       status: { in: ['open', 'triaged'] },
       OR: [
@@ -896,19 +845,20 @@ export async function runSourceAgnosticIntelligencePass(params?: {
       { lastEvaluatedAt: { sort: 'asc', nulls: 'first' } },
       { firstSeenAt: 'desc' },
     ],
-    take: clusterLimit * 4,
+    take: 5000,
   });
 
   // ── Source-family diversity: round-robin across families so no single
   // source (e.g. regulatory/clinical) monopolizes the budget. Within each
   // family, preserve the scheduling order (never-evaluated first, then stale).
-  const buckets = new Map<string, typeof candidates>();
-  for (const cluster of candidates) {
+  const buckets = new Map<string, typeof allCandidates>();
+  for (const cluster of allCandidates) {
     const family = sourceFamily(cluster.clusterType || '');
     const bucket = buckets.get(family) || [];
     bucket.push(cluster);
     buckets.set(family, bucket);
   }
+  const candidates = allCandidates;
   const familySizes = [...buckets.entries()].map(([family, bucket]) => `${family}:${bucket.length}`).join(', ');
   const clusters = [];
   const entries = [...buckets.entries()];

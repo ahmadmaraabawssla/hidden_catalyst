@@ -182,7 +182,7 @@ describe('buildResearchReport', () => {
     expect(report.qualificationReasons.some((r) => r.includes('immaterial'))).toBe(true);
   });
 
-  it('rejects a clinical trial with no extracted dollar amount (no economic mechanism)', () => {
+  it('rejects a routine clinical trial with no phase/status (no economic mechanism)', () => {
     const materiality = computeMateriality({
       eventType: 'clinical_trial_result',
       amount: null,
@@ -206,8 +206,22 @@ describe('buildResearchReport', () => {
       attentionAvailable: true, attentionMeasured: false, priceReactionAvailable: true, priceReactionMeasured: true,
       relationshipConfidence: 90,
     });
+    // A trial with no phase/status/enrollment is routine registry data → IMMATERIAL → reject.
     expect(report.thesisStatus).toBe('reject');
-    expect(report.qualificationReasons.some((r) => r.includes('no extracted dollar amount'))).toBe(true);
+    expect(report.qualificationReasons.some((r) => r.includes('immaterial'))).toBe(true);
+  });
+
+  it('gives a Phase 3 status change clinical materiality WITHOUT a dollar amount', () => {
+    const materiality = computeMateriality({
+      eventType: 'clinical_trial_result',
+      amount: null,
+      enterpriseValue: 475_000_000,
+      clinicalPhase: 'PHASE3',
+      clinicalStatus: 'COMPLETED',
+      enrollment: 500,
+    });
+    expect(materiality.level).toBe('MODERATE');
+    expect(materiality.metric).toBe('clinical stage / status');
   });
 
   it('closes out a watch item with no ratio after the shelf-life window', () => {

@@ -325,29 +325,42 @@ function statusFromReport(args: {
   // is NOT information asymmetry — it is the efficient-market response to an
   // irrelevant record. Reject it outright rather than labeling it "candidate"
   // or "promising". This is the single most important filter in the product.
+  // (When there is no ratio — e.g. a routine clinical trial assessed
+  // qualitatively — use the materiality explanation instead of a fake %.)
   if (args.materiality.level === 'IMMATERIAL') {
-    reasons.push(`Economically immaterial — ${args.materiality.metric} is ${(args.materiality.ratio! * 100).toExponential(1)}%, below the 0.25% relevance floor.`);
+    reasons.push(args.materiality.ratio != null
+      ? `Economically immaterial — ${args.materiality.metric} is ${(args.materiality.ratio * 100).toExponential(1)}%, below the 0.25% relevance floor.`
+      : `Economically immaterial — ${args.materiality.explanation}`);
     return { status: 'reject' as ThesisStatus, reasons };
   }
 
-  // ── No-economic-mechanism closure ──
-  // A clinical trial / regulatory record with no extracted dollar amount has no
-  // measurable economic link to a listed company — it is routine registry data,
-  // not a catalyst under investigation. Close it out rather than letting it
-  // accumulate in "watch" forever. Gate on `numerator` (the event amount), NOT
-  // `denominator`: clinical/regulatory records always inherit a market-cap
-  // derived denominator, so the old `denominator == null` check never fired and
-  // left ~200 routine registry records parked in "watch".
-  if (/clinical_trial|trial|regulatory/.test(args.eventType) && args.materiality.numerator == null) {
-    reasons.push('Clinical/regulatory record has no extracted dollar amount — no measurable economic mechanism.');
+  // ── Clinical/regulatory closure ──
+  // A clinical trial / regulatory record is routine registry data UNLESS its
+  // qualitative materiality (phase, enrollment, status change) says otherwise.
+  // The old rule ("no extracted dollar amount → reject") was wrong for clinical
+  // events: a pre-revenue biotech's Phase 3 status change has no dollar amount
+  // yet is genuinely material. Now `computeMateriality` already maps routine
+  // trials (phase 1 / no phase / no status change) to IMMATERIAL — which the
+  // hard materiality gate above rejects — and meaningful trials (phase 2/3 +
+  // status change) to LOW/MODERATE, which flow through normally. So we only
+  // close out clinical records that are STILL unresolved after the shelf-life
+  // window (no phase AND no status AND no amount — truly unparseable registry
+  // data that can never resolve).
+  const isClinical = /clinical_trial|trial|regulatory/.test(args.eventType);
+  const noClinicalSignal = args.materiality.numerator == null && args.materiality.level === 'UNKNOWN';
+  if (isClinical && noClinicalSignal && args.eventAgeMs != null && args.eventAgeMs > WATCH_SHELF_LIFE_MS) {
+    reasons.push('Clinical/regulatory record has no resolvable stage or mechanism after the research window — routine registry data.');
     return { status: 'reject' as ThesisStatus, reasons };
   }
 
   // ── Watch shelf-life closure ──
-  // An item still in "watch" with no computable ratio after the research window
-  // will never resolve (the missing amount/denominator is not coming). Close it
-  // out instead of letting it accumulate on the shelf forever.
-  if (args.materiality.ratio == null && args.eventAgeMs != null && args.eventAgeMs > WATCH_SHELF_LIFE_MS) {
+  // An item still in "watch" with UNRESOLVED materiality after the research
+  // window will never resolve (the missing amount/denominator is not coming).
+  // Key on `level === 'UNKNOWN'`, NOT `ratio == null`: a clinical trial with
+  // qualitative LOW/MODERATE materiality has a KNOWN level (and no dollar
+  // ratio) — it must stay watchable, not be shelf-closed for lacking a number
+  // that the economic mechanism never had.
+  if (args.materiality.level === 'UNKNOWN' && args.eventAgeMs != null && args.eventAgeMs > WATCH_SHELF_LIFE_MS) {
     reasons.push('No economic mechanism resolved within the research window — closing out.');
     return { status: 'reject' as ThesisStatus, reasons };
   }

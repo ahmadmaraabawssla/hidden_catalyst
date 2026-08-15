@@ -19,6 +19,12 @@ export interface MaterialityInput {
   potentialShares?: number | null;
   existingCapacity?: number | null;
   newCapacity?: number | null;
+  /** Clinical-trial phase (e.g. "PHASE1"/"PHASE2"/"PHASE3"). Source-specific. */
+  clinicalPhase?: string | null;
+  /** Clinical-trial enrollment count. Source-specific. */
+  enrollment?: number | null;
+  /** Clinical-trial overall status (COMPLETED / RECRUITING / etc.). */
+  clinicalStatus?: string | null;
   /** Date the event occurred. Used to detect stale catalysts (see below). */
   eventDate?: Date | null;
   /** As-of date for the financial denominator. Defaults to now. */
@@ -70,6 +76,15 @@ export function computeMateriality(input: MaterialityInput): MaterialityResult {
     numerator = input.newCapacity ?? input.amount ?? null;
     denominator = input.existingCapacity ?? input.assets ?? null;
   } else if (/trial|clinical|fda|approval|drug/.test(eventType)) {
+    // ── Source-specific: clinical/regulatory materiality is NOT a dollar ratio ──
+    // A pre-revenue biotech's single Phase III asset has no "event amount", yet
+    // a status change is enormously material. Forcing "market opportunity / EV"
+    // onto a bare clinical trial produces UNKNOWN (and then a wrong reject).
+    // Instead, materiality derives from the trial's stage, size, and status —
+    // the dimensions that actually move a biotech's value. If a real dollar
+    // amount IS present (e.g. a partnered milestone), fall through to the ratio.
+    const clinical = computeClinicalMateriality(input);
+    if (clinical) return clinical;
     metric = 'market opportunity / enterprise value';
     denominator = input.enterpriseValue ?? input.revenue ?? null;
   } else if (/share|dilution/.test(eventType) && input.potentialShares) {
@@ -110,6 +125,84 @@ export function computeMateriality(input: MaterialityInput): MaterialityResult {
       : effectiveRatio == null
         ? `${metric} could not be computed because a required input is missing.`
         : `${metric} is ${pct(effectiveRatio)}, classified as ${level}.`,
+  };
+}
+
+/**
+ * Clinical/regulatory materiality — qualitative, not a dollar ratio.
+ *
+ * For a clinical trial or FDA event, the economically meaningful dimensions are
+ * the trial's stage, size, and what changed — not a dollar amount (there isn't
+ * one). A single Phase III asset at a pre-revenue biotech can be worth the
+ * whole company. This maps those qualitative signals onto the same
+ * MaterialityLevel scale so downstream qualification works unchanged.
+ *
+ * Heuristic (conservative — never inflates routine registry data):
+ *   - A STATUS CHANGE (COMPLETED / primary completion / TERMINATED / approved)
+ *     is the strongest signal — it means something happened, not just a record.
+ *   - Phase 3 + a status change → MODERATE (registrational, near-approval).
+ *   - Phase 2 + a status change, or Phase 3 without a change → LOW.
+ *   - Phase 1 / no phase / no status → IMMATERIAL (routine registry data).
+ *   - Large enrollment nudges up; tiny enrollment nudges down.
+ *
+ * Returns null when there is no clinical signal at all (so callers fall through
+ * to the dollar-ratio path), or a MaterialityResult when a qualitative
+ * assessment applies.
+ */
+function computeClinicalMateriality(input: MaterialityInput): MaterialityResult | null {
+  const phase = (input.clinicalPhase || '').toUpperCase();
+  const status = (input.clinicalStatus || '').toUpperCase();
+  const enrollment = input.enrollment ?? 0;
+  const isClinical = /trial|clinical|fda|approval|drug/.test((input.eventType || '').toLowerCase());
+  if (!isClinical) return null;
+
+  const hasPhase = !!phase;
+  const hasStatus = !!status;
+  // Only assess qualitatively when there is no dollar amount to ratio against.
+  const hasDollarAmount = input.amount != null && input.amount > 0;
+  if (hasDollarAmount) return null;
+
+  const statusChange = /COMPLETED|TERMINATED|SUSPENDED|WITHDRAWN|APPROVED|PRIMARY.?COMPLETION|ACTIVE_NOT_RECRUITING/i.test(status);
+  const isPhase3 = /PHASE\s*3|PHASE\s*III|PHASE\s*IV/i.test(phase);
+  const isPhase2 = /PHASE\s*2|PHASE\s*II/i.test(phase);
+  const isPhase1 = /PHASE\s*1|PHASE\s*I|EARLY.?PHASE/i.test(phase);
+
+  let level: MaterialityLevel;
+  let note: string;
+
+  if (statusChange && isPhase3) {
+    level = enrollment >= 100 ? 'MODERATE' : 'LOW';
+    note = `Phase 3 status change (${status})${enrollment ? `, ${enrollment} enrolled` : ''}.`;
+  } else if (statusChange && isPhase2) {
+    level = 'LOW';
+    note = `Phase 2 status change (${status}).`;
+  } else if (isPhase3) {
+    level = 'LOW';
+    note = `Phase 3 trial (${status || 'status unknown'}).`;
+  } else if (isPhase2 && statusChange === false) {
+    level = 'IMMATERIAL';
+    note = `Phase 2 trial with no status change — routine registry data.`;
+  } else if (isPhase1 || !hasPhase) {
+    level = 'IMMATERIAL';
+    note = isPhase1 ? 'Phase 1 / early-phase trial — not yet a material value driver.' : 'No phase reported — routine registry data.';
+  } else {
+    level = 'IMMATERIAL';
+    note = hasStatus ? `Trial status ${status} with no meaningful phase.` : 'No phase or status — routine registry data.';
+  }
+
+  const metric = 'clinical stage / status';
+  const numerator = enrollment > 0 ? enrollment : null;
+  const denominator = null;
+  const confidence = statusChange ? 0.6 : 0.4;
+
+  return {
+    metric,
+    numerator,
+    denominator,
+    ratio: null,
+    level,
+    confidence,
+    explanation: `${metric}: ${note}`,
   };
 }
 
