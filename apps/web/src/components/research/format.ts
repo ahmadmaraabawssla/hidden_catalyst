@@ -102,7 +102,7 @@ export function plainThesis(status: string | null | undefined): { label: string;
     case 'verified':
       return { label: 'Verified', meaning: 'Fully checked out — the evidence holds up and the market has had time to react.' };
     case 'candidate':
-      return { label: 'Promising', meaning: 'A real signal worth a closer look, but not fully confirmed yet.' };
+      return { label: 'Qualified', meaning: 'A real signal worth a closer look, with the economic direction labeled separately.' };
     case 'watch':
       return { label: 'Watching', meaning: 'Something caught our attention, but key details are still missing.' };
     case 'reject':
@@ -110,6 +110,22 @@ export function plainThesis(status: string | null | undefined): { label: string;
       return { label: 'Not a catalyst', meaning: 'This turned out to be routine — nothing hidden here.' };
     default:
       return { label: status || 'Unknown', meaning: '' };
+  }
+}
+
+/** Plain-English economic direction (the missing dimension). */
+export function plainDirection(direction: string | null | undefined): { label: string; emoji: string; tone: string } {
+  switch (direction) {
+    case 'positive':
+      return { label: 'Potential positive', emoji: '🟢', tone: 'This could be good for the company.' };
+    case 'negative':
+      return { label: 'Potential negative', emoji: '🔴', tone: 'This could hurt the company — a risk, not a tailwind.' };
+    case 'mixed':
+      return { label: 'Mixed', emoji: '🟡', tone: 'There are both positive and negative mechanisms at play.' };
+    case 'unclear':
+      return { label: 'Direction unclear', emoji: '⚪', tone: 'Important development, but the direction is unresolved.' };
+    default:
+      return { label: 'Unclear', emoji: '⚪', tone: '' };
   }
 }
 

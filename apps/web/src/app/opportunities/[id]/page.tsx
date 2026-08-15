@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { getEngineOpportunity } from '@/lib/engine-data';
-import { formatMC, formatPrice, formatPct, formatDate, formatMoney, cleanCompanyName, formatRatio, relativeTime, plainThesis, plainMateriality } from '@/components/research/format';
+import { formatMC, formatPrice, formatPct, formatDate, formatMoney, cleanCompanyName, formatRatio, relativeTime, plainMateriality, plainDirection } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,7 +51,7 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
   const adversarial = opp.adversarial;
   const completeness = opp.researchCompleteness ?? report?.completeness ?? 0;
   const confidence = opp.confidence ?? report?.confidence ?? 0;
-  const thesis = plainThesis(opp.verificationStatus);
+  const dir = plainDirection(report?.direction ?? 'unclear');
   const matPlain = plainMateriality(mat?.level);
 
   return (
@@ -83,15 +83,16 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
       <section className="mb-6 rounded-xl border-l-4 border-brand-500 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center gap-3">
           <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold ${
-            opp.verificationStatus === 'verified' ? 'bg-emerald-100 text-emerald-800'
-            : opp.verificationStatus === 'candidate' ? 'bg-blue-100 text-blue-800'
-            : 'bg-amber-100 text-amber-800'
+            report?.direction === 'negative' ? 'bg-rose-100 text-rose-800'
+            : report?.direction === 'positive' ? 'bg-emerald-100 text-emerald-800'
+            : report?.direction === 'mixed' ? 'bg-amber-100 text-amber-800'
+            : 'bg-gray-100 text-gray-700'
           }`}>
-            {thesis.label}
+            {dir.emoji} {dir.label}
           </span>
           <span className="text-xs text-gray-400">detected {relativeTime(opp.detectedAt)}</span>
         </div>
-        <p className="mt-3 text-sm text-gray-600">{thesis.meaning}</p>
+        <p className="mt-3 text-sm text-gray-600">{dir.tone}</p>
         {(report?.qualificationReasons ?? []).length > 0 && (
           <div className="mt-3 border-t border-gray-100 pt-3">
             <span className="text-xs font-medium uppercase tracking-wide text-gray-400">Why this verdict</span>

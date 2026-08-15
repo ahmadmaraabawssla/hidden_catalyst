@@ -66,6 +66,34 @@ export default function MethodologyPage() {
           </div>
         </section>
 
+        {/* Direction — the economic sign */}
+        <section>
+          <h2 className="mb-4 text-xl font-semibold text-gray-900">What direction is it?</h2>
+          <p className="mb-4 text-sm text-gray-600">
+            &quot;Interesting&quot; is not the same as &quot;good.&quot; A catalyst can be material, underfollowed,
+            and well-supported while being <span className="font-medium text-rose-700">bad</span> for the company.
+            Every discovery carries a direction, independent of how interesting it is.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="card border-emerald-200 bg-emerald-50/40">
+              <h3 className="font-semibold text-emerald-800">🟢 Positive</h3>
+              <p className="mt-1 text-sm text-gray-600">Potentially good for the company — a contract, approval, or expansion.</p>
+            </div>
+            <div className="card border-rose-200 bg-rose-50/40">
+              <h3 className="font-semibold text-rose-800">🔴 Negative</h3>
+              <p className="mt-1 text-sm text-gray-600">Potentially harmful — a liability, default, warrant dilution, or deficiency. This is a risk thesis, not a tailwind.</p>
+            </div>
+            <div className="card border-amber-200 bg-amber-50/40">
+              <h3 className="font-semibold text-amber-800">🟡 Mixed</h3>
+              <p className="mt-1 text-sm text-gray-600">Both positive and negative mechanisms at play.</p>
+            </div>
+            <div className="card border-gray-200 bg-gray-50/40">
+              <h3 className="font-semibold text-gray-700">⚪ Unclear</h3>
+              <p className="mt-1 text-sm text-gray-600">An important development, but the direction isn't resolved yet.</p>
+            </div>
+          </div>
+        </section>
+
         {/* Thesis statuses */}
         <section>
           <h2 className="mb-4 text-xl font-semibold text-gray-900">Thesis Statuses</h2>
@@ -92,7 +120,7 @@ export default function MethodologyPage() {
                 </tr>
                 <tr>
                   <td className="py-2 font-medium text-rose-700">Rejected</td>
-                  <td className="py-2">Did not survive the epistemic checks.</td>
+                  <td className="py-2">Did not survive the epistemic checks — or the researcher concluded it was routine.</td>
                 </tr>
               </tbody>
             </table>
@@ -101,6 +129,7 @@ export default function MethodologyPage() {
             Only <span className="font-medium text-emerald-700">verified</span> and{' '}
             <span className="font-medium text-blue-700">candidate</span> theses appear in the Qualified feed.
             Everything else remains in the Research Queue until it matures or is rejected.
+            A rejection is a successful result — we'd rather show nothing than show routine filings as if they mattered.
           </p>
         </section>
 

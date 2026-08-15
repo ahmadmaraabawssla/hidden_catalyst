@@ -38,6 +38,8 @@ export type {
   ScenarioTable,
   ThesisStatus,
 } from './research-report';
+export { inferDirection } from './direction';
+export type { CatalystDirection } from './direction';
 export {
   ContractDeepResearcher,
   createDefaultResearchRegistry,

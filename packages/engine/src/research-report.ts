@@ -1,5 +1,6 @@
 import type { MaterialityResult } from './materiality';
 import type { AdversarialResult } from './adversarial';
+import { inferDirection, type CatalystDirection } from './direction';
 
 export type ClaimStatus = 'verified' | 'inferred' | 'unverified' | 'rejected';
 export type CheckStatus = 'verified' | 'partial' | 'pending' | 'failed' | 'not_applicable';
@@ -46,6 +47,8 @@ export interface ResearchReport {
   version: 'research_report_v1';
   thesis: string;
   thesisStatus: ThesisStatus;
+  /** Economic sign of the catalyst — independent of interestingness/materiality. */
+  direction: CatalystDirection;
   summary: string;
   verifiedFacts: ResearchClaim[];
   inferredClaims: ResearchClaim[];
@@ -92,6 +95,10 @@ export interface ResearchReportInput {
     missingInputs?: string[];
     openQuestions?: string[];
     researchers?: string[];
+    /** Economic sign inferred by the researcher(s). */
+    direction?: CatalystDirection;
+    /** true when the researcher explicitly concluded "routine / no hidden opportunity". */
+    isRoutine?: boolean | null;
   };
 }
 
@@ -282,6 +289,7 @@ function statusFromReport(args: {
   adversarial: AdversarialResult;
   completeness: number;
   relationshipConfidence: number;
+  llmIsRoutine: boolean;
 }) {
   const reasons: string[] = [];
   if (!args.hasPrimaryEvidence) reasons.push('No primary public evidence linked.');
@@ -290,6 +298,17 @@ function statusFromReport(args: {
   if (args.relationshipConfidence < 70) reasons.push('Relationship confidence below threshold.');
   if (args.completeness < 60) reasons.push('Research completeness below candidate threshold.');
   if (args.adversarial.fatalContradiction) reasons.push('Fatal contradiction detected.');
+
+  // ── INVARIANT: the researcher's own verdict is authoritative ──
+  // If the LLM researcher explicitly concluded the filing is routine / has no
+  // hidden opportunity, that conclusion MUST flow into the final status. It
+  // must never coexist with "candidate"/"promising". This fixes the bug where
+  // the deterministic qualifier independently said "candidate" while the LLM
+  // said "not a hidden opportunity".
+  if (args.llmIsRoutine) {
+    reasons.push('Researcher concluded this is a routine filing with no hidden opportunity.');
+    return { status: 'reject' as ThesisStatus, reasons };
+  }
 
   // ── HARD materiality gate ──
   // A real-but-negligible event (e.g. a $2M contract at a $44B-revenue company)
@@ -378,6 +397,10 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
   const checks = buildChecks(input, combined);
   const completeness = completenessFromChecks(checks);
   const relationshipConfidence = input.relationshipConfidence ?? 70;
+  const llmIsRoutine = input.deepResearch?.isRoutine === true;
+  // Direction comes from the researcher's inference when available, else from
+  // the event type + text deterministically.
+  const direction: CatalystDirection = input.deepResearch?.direction ?? inferDirection(input.eventType, combined);
   const qualification = statusFromReport({
     hasPrimaryEvidence: input.signals.length > 0,
     hasThesis: !!input.thesis || input.signals.length > 0,
@@ -385,6 +408,7 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     adversarial: input.adversarial,
     completeness,
     relationshipConfidence,
+    llmIsRoutine,
   });
   const confidence = clamp(
     35 +
@@ -400,6 +424,7 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     version: 'research_report_v1',
     thesis: input.thesis || input.title,
     thesisStatus: qualification.status,
+    direction,
     summary: input.deepResearch?.summary || (qualification.status === 'verified'
       ? 'High-confidence public-signal thesis with core checks resolved.'
       : 'Promising public-signal thesis; unresolved checks limit conviction.'),

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getEngineOpportunities, getLastEngineRun } from '@/lib/engine-data';
-import { formatMC, formatPrice, cleanCompanyName, formatRatio, relativeTime, plainThesis, plainMateriality, isStale, discoveryDelayDays } from '@/components/research/format';
+import { formatMC, formatPrice, cleanCompanyName, formatRatio, relativeTime, plainMateriality, plainDirection, isStale, discoveryDelayDays } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -74,7 +74,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
         <div className="space-y-3">
           {opportunities.map((opp) => {
             const mat = opp.materiality;
-            const thesis = plainThesis(opp.verificationStatus);
+            const dir = plainDirection(opp.report?.direction ?? 'unclear');
             const matPlain = plainMateriality(mat?.level);
             const attention = opp.attention;
             const priceReaction = opp.priceReaction;
@@ -107,14 +107,15 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                   {opp.report?.summary || opp.summary || opp.title}
                 </h3>
 
-                {/* Plain-English verdict strip */}
+                {/* Plain-English verdict strip — direction first, then materiality */}
                 <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
                   <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${
-                    opp.verificationStatus === 'verified' ? 'bg-emerald-100 text-emerald-800'
-                    : opp.verificationStatus === 'candidate' ? 'bg-blue-100 text-blue-800'
-                    : 'bg-amber-100 text-amber-800'
+                    opp.report?.direction === 'negative' ? 'bg-rose-100 text-rose-800'
+                    : opp.report?.direction === 'positive' ? 'bg-emerald-100 text-emerald-800'
+                    : opp.report?.direction === 'mixed' ? 'bg-amber-100 text-amber-800'
+                    : 'bg-gray-100 text-gray-700'
                   }`}>
-                    {thesis.label}
+                    {dir.emoji} {dir.label}
                   </span>
 
                   {mat && mat.level !== 'UNKNOWN' && (

@@ -90,6 +90,7 @@ export interface ScenarioTable {
 export interface ResearchReport {
   thesis: string | null;
   thesisStatus: ThesisStatus;
+  direction: 'positive' | 'negative' | 'mixed' | 'unclear';
   summary: string;
   verifiedFacts: ResearchClaim[];
   inferredClaims: ResearchClaim[];
@@ -196,6 +197,7 @@ function parseReport(value: unknown): ResearchReport | null {
   return {
     thesis: raw.thesis != null ? asString(raw.thesis) : null,
     thesisStatus: (raw.thesisStatus as ThesisStatus) || 'watch',
+    direction: (raw.direction as ResearchReport['direction']) || 'unclear',
     summary: asString(raw.summary),
     verifiedFacts: facts,
     inferredClaims: inferred,

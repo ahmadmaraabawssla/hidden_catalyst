@@ -181,4 +181,61 @@ describe('buildResearchReport', () => {
     expect(report.thesisStatus).toBe('reject');
     expect(report.qualificationReasons.some((r) => r.includes('immaterial'))).toBe(true);
   });
+
+  it('enforces the invariant: LLM "routine" verdict rejects regardless of materiality', () => {
+    const materiality = computeMateriality({
+      eventType: '8-K',
+      amount: 270_000,
+      revenue: 1_900_000, // ~14% — meaningful, above the immaterial floor
+    });
+    const adversarial = runDeterministicAdversarialCheck({
+      eventType: '8-K',
+      title: 'Settlement default',
+      thesis: 'Settlement default triggers a $270K claim.',
+      materialityRatio: materiality.ratio,
+      evidenceQuality: 90,
+      relationshipConfidence: 90,
+    });
+    const report = buildResearchReport({
+      title: 'Settlement default',
+      eventType: '8-K',
+      thesis: 'The disclosed default liability is not a hidden opportunity.',
+      materiality,
+      adversarial,
+      signals: [{
+        title: '8-K settlement default',
+        sourceType: 'sec_filing',
+        rawText: 'Settlement default triggers full $270K claim but warrants create dilution overhang.',
+        amounts: [{ value: 270_000 }],
+        sourceQuality: 90,
+      }],
+      attentionAvailable: true,
+      attentionMeasured: false,
+      priceReactionAvailable: true,
+      priceReactionMeasured: true,
+      relationshipConfidence: 90,
+      deepResearch: { isRoutine: true, direction: 'negative' },
+    });
+    // The LLM said "routine / not a hidden opportunity" → must NOT be candidate.
+    expect(report.thesisStatus).toBe('reject');
+    expect(report.qualificationReasons.some((r) => r.includes('routine'))).toBe(true);
+  });
+
+  it('assigns a negative direction to a warrant/dilution/liability catalyst', () => {
+    const materiality = computeMateriality({ eventType: '8-K', amount: 270_000, revenue: 1_900_000 });
+    const adversarial = runDeterministicAdversarialCheck({
+      eventType: '8-K', title: 'Settlement', thesis: 't', materialityRatio: materiality.ratio, evidenceQuality: 90, relationshipConfidence: 90,
+    });
+    const report = buildResearchReport({
+      title: 'Settlement default + warrants',
+      eventType: '8-K',
+      thesis: 'Default liability plus pre-funded warrants.',
+      materiality,
+      adversarial,
+      signals: [{ title: '8-K', sourceType: 'sec_filing', rawText: 'default liability and pre-funded warrant dilution', sourceQuality: 90 }],
+      attentionAvailable: true, attentionMeasured: false, priceReactionAvailable: true, priceReactionMeasured: true,
+      relationshipConfidence: 90,
+    });
+    expect(report.direction).toBe('negative');
+  });
 });

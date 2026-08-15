@@ -634,7 +634,11 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
     attentionAvailable: !!attentionProfile,
     attentionMeasured: !!attentionProfile?.measured,
     relationshipConfidence: deepResearch.relationshipConfidence,
-    deepResearch,
+    deepResearch: {
+      ...deepResearch,
+      direction: deepResearch.direction,
+      isRoutine: deepResearch.isRoutine,
+    },
     signals: cluster.signals.map(({ signal }) => ({
       title: signal.title,
       sourceType: signal.sourceType,

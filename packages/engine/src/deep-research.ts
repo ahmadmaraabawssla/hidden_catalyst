@@ -8,6 +8,7 @@ const { setApiKey, extractFromFiling } = require('./llm-extractor.js') as {
 const { resolveDefinedTerms } = require('./cdr.js') as {
   resolveDefinedTerms: (text: string, cik: string) => Promise<{ context?: string; terms?: Record<string, unknown> }>;
 };
+import { inferDirection, type CatalystDirection } from './direction';
 
 export type DeepResearchFamily = 'sec' | 'contracts' | 'regulatory' | 'patents';
 
@@ -59,6 +60,14 @@ export interface DeepResearchResult {
   relationshipConfidence: number;
   attributes: Record<string, unknown>;
   evidenceUrls: string[];
+  /** Economic sign of the catalyst (positive/negative/mixed/unclear). */
+  direction: CatalystDirection;
+  /**
+   * Whether the researcher (esp. the LLM) concluded this is a routine filing
+   * with NO hidden opportunity. `null` means "not assessed" (deterministic
+   * researchers). `true` means "explicitly concluded not a hidden opportunity".
+   */
+  isRoutine: boolean | null;
 }
 
 export interface DeepResearchContext {
@@ -166,10 +175,17 @@ export class SecDeepResearcher implements DeepResearcher {
 
     const sourceUrl = textUrl || signal.sourceUrl;
     const facts = Array.isArray(extraction?.verifiedFacts) ? extraction.verifiedFacts : [];
+    // ── Propagate the LLM's own verdict ──
+    // The LLM extractor returns isRoutine (no hidden angle) and verificationStatus.
+    // These MUST flow into the final qualification — the previous code read only
+    // hiddenAngle.claim and silently dropped "this is routine / not an opportunity",
+    // producing the "not a hidden opportunity" thesis + "Promising" badge bug.
+    const llmIsRoutine = typeof extraction?.isRoutine === 'boolean' ? (extraction.isRoutine as boolean) : null;
+    const thesisText = extraction?.hiddenAngle?.claim || extraction?.insightTitle || context.thesis || undefined;
     return {
       researcher: this.id,
       family: this.family,
-      thesis: extraction?.hiddenAngle?.claim || extraction?.insightTitle || context.thesis || undefined,
+      thesis: thesisText,
       summary: extraction?.eventSummary || extraction?.whyItMatters || `Full SEC filing reviewed for ${metadata.formType || context.clusterType}.`,
       verifiedFacts: facts.length
         ? facts.map((fact: unknown) => ({ text: String(fact), sourceUrl, confidence: 0.9 }))
@@ -186,6 +202,8 @@ export class SecDeepResearcher implements DeepResearcher {
       relationshipConfidence: Number(extraction?.relationshipConfidence || 90),
       attributes: { formType: metadata.formType, accessionNumber: metadata.accessionNumber, filingTextLength: filingText.length, resolvedTerms, extraction },
       evidenceUrls: unique([signal.sourceUrl, textUrl]),
+      direction: inferDirection(context.clusterType, `${signal.title} ${thesisText || ''}`),
+      isRoutine: llmIsRoutine,
     };
   }
 }
@@ -194,7 +212,7 @@ abstract class DeterministicResearcher implements DeepResearcher {
   abstract id: string;
   abstract family: DeepResearchFamily;
   abstract pattern: RegExp;
-  abstract summarize(context: DeepResearchContext, signal: DeepResearchSignal, metadata: Record<string, any>): Omit<DeepResearchResult, 'researcher' | 'family'>;
+  abstract summarize(context: DeepResearchContext, signal: DeepResearchSignal, metadata: Record<string, any>): Omit<DeepResearchResult, 'researcher' | 'family' | 'direction' | 'isRoutine'>;
 
   supports(context: DeepResearchContext) {
     return context.signals.some((signal) => this.pattern.test(`${signal.sourceType} ${signal.title}`));
@@ -202,7 +220,14 @@ abstract class DeterministicResearcher implements DeepResearcher {
 
   async research(context: DeepResearchContext): Promise<DeepResearchResult> {
     const signal = firstSignal(context, this.pattern) || context.signals[0]!;
-    return { researcher: this.id, family: this.family, ...this.summarize(context, signal, object(signal.rawMetadata)) };
+    const summary = this.summarize(context, signal, object(signal.rawMetadata));
+    return {
+      researcher: this.id,
+      family: this.family,
+      ...summary,
+      direction: inferDirection(context.clusterType, `${signal.title} ${summary.thesis || ''}`),
+      isRoutine: null,
+    };
   }
 }
 
@@ -307,7 +332,30 @@ export function createDefaultResearchRegistry() {
     .register(new PatentDeepResearcher());
 }
 
-export function mergeDeepResearch(results: DeepResearchResult[]) {
+export function mergeDeepResearch(results: DeepResearchResult[]): {
+  thesis?: string;
+  summary: string;
+  verifiedFacts: DeepResearchFact[];
+  inferredClaims: string[];
+  contradictions: string[];
+  missingInputs: string[];
+  openQuestions: string[];
+  amounts: Array<{ value: number; label: string; currency?: string }>;
+  relationshipConfidence: number;
+  evidenceUrls: string[];
+  researchers: string[];
+  results: DeepResearchResult[];
+  direction: CatalystDirection;
+  isRoutine: boolean | null;
+} {
+  // Direction: the first non-unclear direction wins (negative/mixed/positive
+  // are more informative than 'unclear').
+  const direction: CatalystDirection = results
+    .map((r) => r.direction)
+    .find((d) => d !== 'unclear') ?? 'unclear';
+  // isRoutine: if ANY researcher (esp. the LLM) explicitly concluded the filing
+  // is routine / has no hidden angle, surface that — it is decisive.
+  const isRoutine = results.some((r) => r.isRoutine === true) || null;
   return {
     thesis: results.find((result) => result.thesis)?.thesis,
     summary: results.map((result) => result.summary).join(' '),
@@ -321,5 +369,7 @@ export function mergeDeepResearch(results: DeepResearchResult[]) {
     evidenceUrls: unique(results.flatMap((result) => result.evidenceUrls)),
     researchers: results.map((result) => result.researcher),
     results,
+    direction,
+    isRoutine,
   };
 }
