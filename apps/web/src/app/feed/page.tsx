@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { getEngineOpportunities } from '@/lib/engine-data';
-import { ThesisStatusBadge, LevelBadge, MeasuredTag } from '@/components/research/StatusBadges';
+import { ThesisStatusBadge, LevelBadge, MeasuredTag, UpgradedBadge } from '@/components/research/StatusBadges';
 import { formatMC, formatPrice, formatDate, cleanCompanyName, formatRatio } from '@/components/research/format';
 
 export const dynamic = 'force-dynamic';
@@ -144,6 +144,9 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                       {mat && <LevelBadge level={mat.level} />}
                       {attention && <MeasuredTag measured={attention.measured} label="Attention" />}
                       {priceReaction && <MeasuredTag measured={priceReaction.measured} label="Price" />}
+                      {opp.lastUpgrade && (
+                        <UpgradedBadge from={opp.lastUpgrade.from.thesis} to={opp.lastUpgrade.to.thesis} />
+                      )}
                       {opp.clusterType && (
                         <span className="inline-flex items-center rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
                           {opp.clusterType.replace(/_/g, ' ')}

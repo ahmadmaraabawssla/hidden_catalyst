@@ -76,3 +76,18 @@ export function MeasuredTag({ measured, label }: { measured: boolean | null | un
     </span>
   );
 }
+
+/**
+ * "Upgraded" badge — shown when a re-evaluation meaningfully improved the
+ * thesis (e.g. price reaction flipped proxy→measured, or watch→candidate).
+ * This is the honest "the market had a chance to react and it's still
+ * underfollowed" signal.
+ */
+export function UpgradedBadge({ from, to }: { from: string | null; to: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700 ring-1 ring-inset ring-violet-600/20">
+      <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+      Upgraded {from ? `${from} → ${to}` : to}
+    </span>
+  );
+}

@@ -681,6 +681,28 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   });
   logEvaluation(evaluationLog, researchReport, logger);
 
+  // ── Upgrade detection ──
+  // Record when a re-evaluation meaningfully improves the thesis (e.g. price
+  // reaction flips proxy→measured, or watch→candidate→verified). This is the
+  // "the market had a chance to react, and it's still underfollowed" moment.
+  const prevReport = jsonObject(cluster.structuredAttributes);
+  const prevThesis = (prevReport.researchReport as any)?.thesisStatus ?? null;
+  const prevPriceMeasured = !!(jsonObject(cluster.priceReactionJson) as any)?.measured;
+  const thesisRank: Record<string, number> = { reject: 0, watch: 1, candidate: 2, verified: 3 };
+  const priceNowMeasured = !!(priceReaction as any)?.measured;
+  const upgradedThesis = prevThesis != null && (thesisRank[researchReport.thesisStatus] ?? 0) > (thesisRank[prevThesis] ?? 0);
+  const upgradedPrice = !prevPriceMeasured && priceNowMeasured;
+  const lastUpgrade = (upgradedThesis || upgradedPrice)
+    ? {
+        at: new Date().toISOString(),
+        from: { thesis: prevThesis, priceMeasured: prevPriceMeasured },
+        to: { thesis: researchReport.thesisStatus, priceMeasured: priceNowMeasured },
+      }
+    : (prevReport.lastUpgrade ?? null);
+  if (upgradedThesis || upgradedPrice) {
+    logger.log(`[upgrade] cluster=${clusterId} thesis=${prevThesis ?? 'none'}→${researchReport.thesisStatus} priceMeasured=${prevPriceMeasured}→${priceNowMeasured}`);
+  }
+
   await prisma.catalystCluster.update({
     where: { id: clusterId },
     data: {
@@ -693,6 +715,7 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
         ...jsonObject(cluster.structuredAttributes),
         researchReport,
         deepResearch,
+        ...(lastUpgrade ? { lastUpgrade } : {}),
       } as any,
       researchCompleteness: completeness,
       researchConfidence: researchReport.confidence,

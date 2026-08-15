@@ -144,6 +144,11 @@ export interface OpportunityResearch {
   priceReaction: PriceReactionResult | null;
   adversarial: AdversarialResult | null;
   signals: SignalSource[];
+  lastUpgrade: {
+    at: string;
+    from: { thesis: string | null; priceMeasured: boolean };
+    to: { thesis: string; priceMeasured: boolean };
+  } | null;
 }
 
 function pgClient() {
@@ -297,6 +302,19 @@ function mapOpportunity(row: Record<string, unknown>): OpportunityResearch {
     priceReaction: parsePriceReaction(row.price_reaction_json),
     adversarial: parseAdversarial(row.adversarial_json) ?? report?.adversarial ?? null,
     signals: [],
+    lastUpgrade: parseLastUpgrade(row.last_upgrade),
+  };
+}
+
+function parseLastUpgrade(value: unknown): OpportunityResearch['lastUpgrade'] {
+  const raw = jsonOrNull<Record<string, unknown>>(value);
+  if (!raw || typeof raw !== 'object') return null;
+  const from = jsonOrNull<Record<string, unknown>>(raw.from);
+  const to = jsonOrNull<Record<string, unknown>>(raw.to);
+  return {
+    at: asString(raw.at),
+    from: { thesis: from?.thesis != null ? asString(from.thesis) : null, priceMeasured: asBool(from?.priceMeasured) },
+    to: { thesis: asString(to?.thesis), priceMeasured: asBool(to?.priceMeasured) },
   };
 }
 
@@ -307,7 +325,8 @@ const OPPORTUNITY_SELECT = `
   c.display_name AS company_name, c.sector, c.industry,
   cl.cluster_type, cl.status AS cluster_status, cl.thesis AS cluster_thesis, cl.priority_score,
   cl.materiality_json, cl.attention_json, cl.price_reaction_json, cl.adversarial_json,
-  cl.structured_attributes -> 'researchReport' AS report_json
+  cl.structured_attributes -> 'researchReport' AS report_json,
+  cl.structured_attributes -> 'lastUpgrade' AS last_upgrade
 `;
 
 const OPPORTUNITY_JOIN = `
