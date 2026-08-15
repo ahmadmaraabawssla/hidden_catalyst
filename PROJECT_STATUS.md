@@ -2,7 +2,7 @@
 
 > Last updated: 2026-08-11
 
-**DeepSeek model:** `deepseek-chat`, key `sk-c5135050d24745d09b7c2829db101716`
+**DeepSeek model:** `deepseek-chat`, key stored in `.env` (gitignored)
 
 ---
 
@@ -143,8 +143,8 @@ http://localhost:3000/admin → "Run Discovery" button
 
 | Service | Key | Status |
 |---|---|---|
-| DeepSeek AI | `sk-c5135050d24745d09b7c2829db101716` | ✅ in `.env` |
-| FMP | `o2CG0TwWzkqWxU9hz0kb7fW6dCzYXAMx` | ✅ in `.env` |
+| DeepSeek AI | stored in `.env` (gitignored) | ✅ in `.env` |
+| FMP | stored in `.env` (gitignored) | ✅ in `.env` |
 | Supabase DB | Postgres connection string | ✅ in `.env` |
 | GitHub Actions | Same as above, as repo secrets | 🔸 DEEPSEEK key needs update |
 

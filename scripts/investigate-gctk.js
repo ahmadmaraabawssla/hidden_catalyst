@@ -15,7 +15,7 @@ const { resolveDefinedTerms } = require('../packages/engine/src/cdr');
 const { extractDefinedTerms } = require('../packages/engine/src/term-extractor');
 
 const DB = process.env.DATABASE_URL;
-const FMP_KEY = process.env.FMP_API_KEY || 'o2CG0TwWzkqWxU9hz0kb7fW6dCzYXAMx';
+const FMP_KEY = process.env.FMP_API_KEY || '';
 const UA = 'Hidden Catalyst contact@hiddencatalyst.com';
 const CIK = '0001506983';
 const OPP_ID = 'o_dly_0001506983_00014931522603';

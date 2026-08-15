@@ -27,9 +27,9 @@ git push origin main
 4. Add Environment Variables (copy from `.env`):
    ```
    DATABASE_URL=postgresql://postgres.xrfoyckeohsuexoybbxm:[PASSWORD]@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
-   FMP_API_KEY=o2CG0TwWzkqWxU9hz0kb7fW6dCzYXAMx
-   CRON_SECRET=dev-secret
-   ADMIN_SECRET=dev-admin-secret
+   FMP_API_KEY=<your-fmp-key>
+   CRON_SECRET=<your-random-cron-secret>
+   ADMIN_SECRET=<your-random-admin-secret>
    NEXT_PUBLIC_APP_URL=https://hidden-catalyst.vercel.app
    ```
 5. Click **Deploy**

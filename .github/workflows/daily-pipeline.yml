@@ -25,15 +25,16 @@ jobs:
 
       - run: pnpm install --no-frozen-lockfile
 
-      - name: Refresh market caps
+      - name: Refresh market caps (cheap, no AI)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: node scripts/fmp-updater.js
 
-      - name: Discover new opportunities
+      - name: Run source-agnostic engine (harvest + AI, once/day)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-        run: node scripts/daily-top20.js
+          SEC_USER_AGENT: "Hidden Catalyst Research contact@hiddencatalyst.com"
+        run: pnpm engine:run
