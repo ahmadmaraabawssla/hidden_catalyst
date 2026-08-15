@@ -18,6 +18,8 @@ export {
 export type { ResearchEvaluationLog } from './signal-intelligence';
 export { computeMateriality, extractLargestAmount } from './materiality';
 export type { MaterialityInput, MaterialityResult } from './materiality';
+export { computeIgnoredScore, ignoredScoreFromAttributes } from '@hidden-catalyst/domain';
+export type { IgnoredInput } from '@hidden-catalyst/domain';
 export { calculatePriceReactionWindows } from './price-reaction';
 export type { PricePoint, PriceReactionResult } from './price-reaction';
 export { runDeterministicAdversarialCheck } from './adversarial';

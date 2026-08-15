@@ -20,12 +20,26 @@ export function formatCapabilityLog(env: NodeJS.ProcessEnv) {
 export async function runIntelligenceEngine() {
   const started = performance.now();
   const logLevel = (process.env.HC_ENGINE_LOG_LEVEL || 'normal') as EngineLogLevel;
+
+  // ── Test mode ──
+  // ENGINE_TEST_MODE=1 forces a small universe so a full pipeline run can be
+  // validated quickly and cheaply (few companies, few signals, few AI calls).
+  // Explicit env vars always win over the test-mode defaults.
+  const testMode = process.env.ENGINE_TEST_MODE === '1';
+  if (testMode) {
+    process.env.SEC_SCAN_LIMIT ??= '30';
+    process.env.SIGNAL_LIMIT ??= '5';
+    process.env.MIN_RESEARCH_PRIORITY ??= '40';
+    process.env.MONITOR_LIMIT ??= '10';
+  }
+
   const signalLimit = numberEnv('SIGNAL_LIMIT', 100);
   const minPriority = numberEnv('MIN_RESEARCH_PRIORITY', 55);
   const monitorLimit = numberEnv('MONITOR_LIMIT', 100);
   const evalFreshnessHours = numberEnv('EVAL_FRESHNESS_HOURS', 12);
+  const deepResearchTopN = numberEnv('DEEP_RESEARCH_TOP_N', 20);
 
-  log(logLevel, `[engine] run started level=${logLevel} signalLimit=${signalLimit} minPriority=${minPriority} monitorLimit=${monitorLimit} evalFreshnessHours=${evalFreshnessHours}`);
+  log(logLevel, `[engine] run started level=${logLevel}${testMode ? ' TEST_MODE=1' : ''} signalLimit=${signalLimit} minPriority=${minPriority} monitorLimit=${monitorLimit} evalFreshnessHours=${evalFreshnessHours} deepResearchTopN=${deepResearchTopN}`);
   log(logLevel, formatCapabilityLog(process.env));
 
   log(logLevel, '[stage] harvest start');
@@ -39,8 +53,8 @@ export async function runIntelligenceEngine() {
   log(logLevel, `[stage] harvest complete fetched=${connectorSummary.fetched} added=${connectorSummary.added} duplicates=${connectorSummary.duplicates} failed=${connectorSummary.failed}`);
 
   log(logLevel, '[stage] intelligence start');
-  const intelligence = await runSourceAgnosticIntelligencePass({ signalLimit, minPriority, logLevel, evalFreshnessHours });
-  log(logLevel, `[stage] intelligence complete clustered=${intelligence.triage.clusters} evaluated=${intelligence.evaluated} skippedFresh=${intelligence.skippedFresh ?? 0}`);
+  const intelligence = await runSourceAgnosticIntelligencePass({ signalLimit, minPriority, logLevel, evalFreshnessHours, deepResearchTopN });
+  log(logLevel, `[stage] intelligence complete clustered=${intelligence.triage.clusters} evaluated=${intelligence.evaluated} deferred=${intelligence.deferred ?? 0} skippedFresh=${intelligence.skippedFresh ?? 0}`);
 
   log(logLevel, '[stage] monitoring start');
   const active = await prisma.opportunity.findMany({

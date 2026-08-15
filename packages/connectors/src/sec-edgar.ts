@@ -7,6 +7,7 @@
  */
 
 import { BaseConnector, type RawDocument, type ExtractionResult } from './base';
+import { computeIgnoredScore } from '@hidden-catalyst/domain';
 import type { PrismaClient } from '@hidden-catalyst/db';
 
 export class SECEdgarConnector extends BaseConnector {
@@ -24,39 +25,66 @@ export class SECEdgarConnector extends BaseConnector {
   async fetchDocuments(since?: Date): Promise<RawDocument[]> {
     const sinceDate = since || new Date(Date.now() - 7 * 86400000);
     const maxCompanies = Number(process.env.SEC_SCAN_LIMIT || 500);
+    const minIgnoredScore = Number(process.env.SCAN_MIN_IGNORED_SCORE || 0);
+    const minMarketCap = Number(process.env.SEC_MIN_MARKET_CAP || 10_000_000);
 
-    // Only listed companies with a CIK and at least one active security on a
-    // major exchange. Sort by market cap ascending (smallest = most likely
-    // overlooked) and bound the universe — a full 8k-company scan is too slow
-    // for a scheduled run and the marginal value of larger caps is low.
-    const companies = await this.prisma.company.findMany({
+    // ── Universe selection: "most ignored", not "smallest" ──
+    // Skip micro-junk (below the floor) but deliberately do NOT cap the top end:
+    // a large but underfollowed company (RKLB) is exactly the point. We fetch a
+    // candidate pool, rank by computeIgnoredScore() (news + volume + cap), and
+    // keep the top SEC_SCAN_LIMIT. This replaces the old "500 smallest by cap"
+    // behavior which filled the whole budget with sub-$100M shells.
+    const candidates = await this.prisma.company.findMany({
       where: {
         cik: { not: null },
-        securities: { some: { active: true, exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] } } },
+        securities: {
+          some: {
+            active: true,
+            exchange: { in: ['NYSE', 'NASDAQ', 'NYSE American'] },
+            marketCap: { gte: minMarketCap },
+          },
+        },
       },
-      take: maxCompanies,
       select: {
         cik: true,
         displayName: true,
-        securities: { where: { active: true }, select: { ticker: true, exchange: true, marketCap: true }, take: 1 },
+        securities: {
+          where: { active: true },
+          select: { ticker: true, exchange: true, marketCap: true, avgDollarVolume: true, attributes: true },
+          take: 1,
+        },
       },
     });
 
-    // Prefer smallest market cap within the bounded set
-    companies.sort((a, b) =>
-      (a.securities[0]?.marketCap ?? Number.MAX_SAFE_INTEGER) -
-      (b.securities[0]?.marketCap ?? Number.MAX_SAFE_INTEGER)
-    );
+    const ranked = candidates
+      .map((company) => {
+        const sec = company.securities[0];
+        const attrs = (sec?.attributes ?? {}) as Record<string, unknown>;
+        const ignoredScore = computeIgnoredScore({
+          news7d: toNumber(attrs.news_7d),
+          avgDollarVolume: sec?.avgDollarVolume ?? toNumber(attrs.avg_dollar_volume),
+          marketCap: sec?.marketCap ?? toNumber(attrs.market_cap),
+          analystCount: toNumber(attrs.analyst_count),
+          instOwnershipPct: toNumber(attrs.inst_ownership),
+        });
+        return { company, ignoredScore, security: sec };
+      })
+      .filter((r) => r.ignoredScore >= minIgnoredScore)
+      .sort((a, b) => b.ignoredScore - a.ignoredScore)
+      .slice(0, maxCompanies);
 
-    if (companies.length === 0) return [];
+    if (ranked.length === 0) {
+      console.log('[SEC EDGAR] No companies passed the ignored-score filter.');
+      return [];
+    }
 
-    console.log(`[SEC EDGAR] Checking ${companies.length} listed companies (bounded to ${maxCompanies}) for recent filings...`);
+    console.log(`[SEC EDGAR] Scanning ${ranked.length} most-ignored companies (floor $${(minMarketCap / 1e6).toFixed(0)}M, minIgnoredScore ${minIgnoredScore})...`);
 
     const materialForms = new Set(['8-K', '10-Q', '10-K', 'S-1', '13D', '13G']);
     const skipForms = new Set(['3', '4', '5', '3/A', '4/A', '144', 'N-PX', 'NPORT-P', 'N-CSR', 'N-CSRS', '6-K', 'ARS', 'CERT', '25', '8-A12B', 'PX14A6G', 'S-8', '424B2', 'FWP', '25-NSE', 'SD']);
     const documents: RawDocument[] = [];
 
-    for (const company of companies) {
+    for (const { company, ignoredScore, security } of ranked) {
       const cik = String(company.cik).padStart(10, '0');
       try {
         const response = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
@@ -84,6 +112,7 @@ export class SECEdgarConnector extends BaseConnector {
           if (filedDate < sinceDate) continue;
 
           const accession = recent.accessionNumber[i] || '';
+          const attrs = (security?.attributes ?? {}) as Record<string, unknown>;
           documents.push({
             canonicalUrl: `https://www.sec.gov/Archives/edgar/data/${cik}/${accession.replace(/-/g, '')}/${accession}.txt`,
             title: `Form ${form} — ${company.displayName}`,
@@ -94,8 +123,12 @@ export class SECEdgarConnector extends BaseConnector {
               accessionNumber: accession,
               formType: form,
               displayName: company.displayName,
-              ticker: company.securities[0]?.ticker || null,
-              exchange: company.securities[0]?.exchange || null,
+              ticker: security?.ticker || null,
+              exchange: security?.exchange || null,
+              marketCap: security?.marketCap ?? null,
+              avgDollarVolume: security?.avgDollarVolume ?? null,
+              news7d: toNumber(attrs.news_7d),
+              ignoredScore,
             },
           });
           break;
@@ -206,4 +239,10 @@ export class SECEdgarConnector extends BaseConnector {
     }
     return amounts;
   }
+}
+
+function toNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }

@@ -735,6 +735,7 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   minPriority?: number;
   logLevel?: EngineLogLevel;
   evalFreshnessHours?: number;
+  deepResearchTopN?: number;
 }) {
   const logger = createLogger(params?.logLevel);
   logger.log(`[engine] source-agnostic pass start signalLimit=${params?.signalLimit ?? 100} minPriority=${params?.minPriority ?? 55}`);
@@ -760,6 +761,7 @@ export async function runSourceAgnosticIntelligencePass(params?: {
         { signals: { some: { signal: { retrievedAt: { gt: staleBefore } } } } },
       ],
     },
+    include: { signals: { include: { signal: true } } },
     orderBy: [
       { lastEvaluatedAt: { sort: 'asc', nulls: 'first' } },
       { firstSeenAt: 'desc' },
@@ -793,6 +795,20 @@ export async function runSourceAgnosticIntelligencePass(params?: {
   }
   logger.log(`[scheduling] candidates=${candidates.length} selected=${clusters.length} families=[${familySizes}]`);
 
+  // ── AI budget: only deep-research the top-N most-ignored clusters ──
+  // The harvest + ranking are cheap (no LLM). Deep research is the expensive
+  // step, so it is bounded to deepResearchTopN and prioritised by ignored
+  // score (a large-but-underfollowed company outranks a heavily-covered one).
+  const deepTopN = params?.deepResearchTopN ?? 20;
+  const deferred: typeof clusters = [];
+  let toEvaluate: typeof clusters = clusters;
+  if (clusters.length > deepTopN) {
+    const ranked = [...clusters].sort((a, b) => clusterIgnoredScore(b) - clusterIgnoredScore(a));
+    toEvaluate = ranked.slice(0, deepTopN);
+    deferred.push(...ranked.slice(deepTopN));
+    logger.log(`[budget] deepResearchTopN=${deepTopN} evaluated=${toEvaluate.length} deferred=${deferred.length} (top ignored scores kept)`);
+  }
+
   const skippedFresh = await prisma.catalystCluster.count({
     where: {
       status: { in: ['open', 'triaged'] },
@@ -801,16 +817,32 @@ export async function runSourceAgnosticIntelligencePass(params?: {
     },
   });
 
-  logger.log(`[engine] evaluating clusters=${clusters.length} skippedFresh=${skippedFresh}`);
+  logger.log(`[engine] evaluating clusters=${toEvaluate.length} skippedFresh=${skippedFresh} deferred=${deferred.length}`);
 
   const evaluated = [];
   const logs: ResearchEvaluationLog[] = [];
-  for (const cluster of clusters) {
+  for (const cluster of toEvaluate) {
     const result = await evaluateClusterForOpportunity(cluster.id, { logLevel: params?.logLevel });
     evaluated.push(result);
     logs.push(result.log);
   }
 
-  logger.log(`[engine] pass complete evaluated=${evaluated.length} skippedFresh=${skippedFresh}`);
-  return { triage, evaluated: evaluated.length, skippedFresh, logs };
+  logger.log(`[engine] pass complete evaluated=${evaluated.length} deferred=${deferred.length} skippedFresh=${skippedFresh}`);
+  return { triage, evaluated: evaluated.length, deferred: deferred.length, skippedFresh, logs };
+}
+
+/**
+ * A cluster's ignored score — the max ignoredScore across its linked signals.
+ * SEC-filing signals carry this on rawMetadata.ignoredScore (set by the
+ * connector). Other source families default to 0 (no ignored signal), so SEC
+ * discoveries with real ignored data rank above un-scored families.
+ */
+function clusterIgnoredScore(cluster: { signals: Array<{ signal: { rawMetadata?: unknown } }> }): number {
+  let best = 0;
+  for (const { signal } of cluster.signals) {
+    const meta = signal.rawMetadata as Record<string, unknown> | null | undefined;
+    const score = Number(meta?.ignoredScore);
+    if (Number.isFinite(score) && score > best) best = score;
+  }
+  return best;
 }
