@@ -75,44 +75,67 @@ export class SECEdgarConnector extends BaseConnector {
       accession: string;
     }> = [];
 
-    for (const company of universe) {
-      const cik = String(company.cik).padStart(10, '0');
-      const security = company.securities[0];
-      if (!security) continue;
-      try {
-        const response = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
-          headers: {
-            'User-Agent': 'Hidden Catalyst Research contact@hiddencatalyst.com',
-            'Accept-Encoding': 'gzip, deflate',
-          },
-          signal: AbortSignal.timeout(10000),
-        });
-        if (!response.ok) continue;
+    // ── Concurrent detect with a global rate limiter ──
+    // SEC allows ≤10 requests/sec. The previous sequential loop (one request
+    // + 100ms throttle per company) took ~50+ minutes for 4,000 companies.
+    // A bounded worker pool keeps total throughput under the limit while
+    // overlapping network latency, cutting the stage to a few minutes.
+    const concurrency = Math.min(8, Number(process.env.SEC_DETECT_CONCURRENCY || 8));
+    let cursor = 0;
+    let lastRequest = 0;
+    const MIN_INTERVAL_MS = 110; // ~9 req/sec, safely under SEC's 10/sec limit
 
-        const data = await response.json();
-        const recent = data?.filings?.recent;
-        if (!recent?.form) continue;
+    async function rateLimitedFetch(url: string): Promise<Response> {
+      const wait = lastRequest + MIN_INTERVAL_MS - Date.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      lastRequest = Date.now();
+      return fetch(url, {
+        headers: {
+          'User-Agent': 'Hidden Catalyst Research contact@hiddencatalyst.com',
+          'Accept-Encoding': 'gzip, deflate',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+    }
 
-        // Most recent material filing within the window (one per company)
-        for (let i = 0; i < Math.min(10, recent.form.length); i++) {
-          const rawForm = (recent.form[i] || '').toUpperCase();
-          const form = rawForm.replace(/\/A$/, '');
-          if (!materialForms.has(form) || skipForms.has(rawForm)) continue;
+    async function worker(): Promise<void> {
+      while (true) {
+        const index = cursor++;
+        if (index >= universe.length) return;
+        const company = universe[index];
+        if (!company) continue;
+        const cik = String(company.cik).padStart(10, '0');
+        const security = company.securities[0];
+        if (!security) continue;
+        try {
+          const response = await rateLimitedFetch(`https://data.sec.gov/submissions/CIK${cik}.json`);
+          if (!response.ok) continue;
 
-          const filed = recent.filingDate[i] || '';
-          if (!filed) continue;
-          const filedDate = new Date(filed);
-          if (filedDate < sinceDate) continue;
+          const data = await response.json();
+          const recent = data?.filings?.recent;
+          if (!recent?.form) continue;
 
-          detected.push({ company, security, cik, form, filedDate, accession: recent.accessionNumber[i] || '' });
-          break;
+          // Most recent material filing within the window (one per company)
+          for (let i = 0; i < Math.min(10, recent.form.length); i++) {
+            const rawForm = (recent.form[i] || '').toUpperCase();
+            const form = rawForm.replace(/\/A$/, '');
+            if (!materialForms.has(form) || skipForms.has(rawForm)) continue;
+
+            const filed = recent.filingDate[i] || '';
+            if (!filed) continue;
+            const filedDate = new Date(filed);
+            if (filedDate < sinceDate) continue;
+
+            detected.push({ company, security, cik, form, filedDate, accession: recent.accessionNumber[i] || '' });
+            break;
+          }
+        } catch {
+          // Skip companies that fail to fetch; continue the rest
         }
-
-        await this.throttle();
-      } catch {
-        // Skip companies that fail to fetch; continue the rest
       }
     }
+
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
     console.log(`[SEC EDGAR] Detected ${detected.length} companies with recent filings. Scoring news coverage...`);
 
@@ -261,14 +284,21 @@ export class SECEdgarConnector extends BaseConnector {
 
   private extractDollarAmounts(text: string) {
     const amounts: Array<{ value: number; currency: string; label: string; confidence: number }> = [];
-    const re = /\$\s?(\d+(?:\.\d+)?)\s?(million|billion|m|b)?/ig;
-    let match;
+    // Handle "$1,234,567", "$10.5 million", "$2B", "$3.2 billion", and bare
+    // "USD 1,000,000". Commas in the mantissa are stripped before parsing so
+    // "1,000,000" is read as one number, not "1".
+    const re = /\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s?(million|billion|m|b)?/gi;
+    let match: RegExpExecArray | null;
     while ((match = re.exec(text)) && amounts.length < 10) {
-      let value = Number(match[1]);
+      const mantissa = match[1];
+      if (!mantissa) continue;
+      const raw = mantissa.replace(/,/g, '');
+      let value = Number(raw);
+      if (!Number.isFinite(value) || value <= 0) continue;
       const unit = (match[2] || '').toLowerCase();
       if (unit === 'billion' || unit === 'b') value *= 1e9;
       if (unit === 'million' || unit === 'm') value *= 1e6;
-      amounts.push({ value, currency: 'USD', label: match[0], confidence: 0.7 });
+      amounts.push({ value, currency: 'USD', label: match[0] || '', confidence: 0.7 });
     }
     return amounts;
   }

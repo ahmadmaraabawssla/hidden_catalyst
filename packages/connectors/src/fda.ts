@@ -209,12 +209,39 @@ export class ClinicalTrialsConnector extends BaseConnector {
           const title = id?.briefTitle || id?.officialTitle || 'Clinical Trial';
           if (!['COMPLETED', 'ACTIVE_NOT_RECRUITING', 'RECRUITING'].includes(status)) continue;
 
+          // ── True lead sponsor ──
+          // The searched company name is only a search key — a trial can match a
+          // collaborator, site, or namesake. The entity that drives public-company
+          // exposure is the LEAD SPONSOR (the legal sponsor responsible for the
+          // study). Extract it so entity resolution matches the real issuer, not
+          // the fuzzy search term (fixes "unresolved_public_security" from wrong
+          // sponsor links, e.g. an NIH trial matched to an unrelated listed shell).
+          const sponsorMod = p?.sponsorCollaboratorsModule;
+          const leadSponsor = sponsorMod?.leadSponsor?.name || company.displayName;
+          const leadSponsorClass = sponsorMod?.leadSponsor?.class || '';
+          // Enrollment, phase, condition, intervention — structured evidence for
+          // triage and deep research (phase/intervention novelty drive relevance).
+          const enrollment = p?.designModule?.enrollmentInfo?.count ?? null;
+          const condition = p?.conditionsModule?.conditions?.[0] ?? null;
+          const interventions = p?.armsInterventionsModule?.interventions?.map((i: any) => i?.name).filter(Boolean) ?? [];
+
           results.push({
             canonicalUrl: `https://clinicaltrials.gov/study/${id?.nctId}`,
             title: `Trial: ${title}`.slice(0, 200),
-            text: `${title}. Status: ${status}. Phase: ${p?.designModule?.phases?.[0] || 'N/A'}. Sponsor: ${company.displayName}.`,
+            text: `${title}. Status: ${status}. Phase: ${p?.designModule?.phases?.[0] || 'N/A'}. Lead sponsor: ${leadSponsor}${enrollment ? ` (${enrollment} enrolled)` : ''}.`,
             publishedAt: new Date(),
-            metadata: { nctId: id?.nctId, status, company: company.displayName, phase: p?.designModule?.phases?.[0], endpoints: p?.outcomesModule?.primaryOutcomes },
+            metadata: {
+              nctId: id?.nctId,
+              status,
+              company: company.displayName,
+              leadSponsor,
+              leadSponsorClass,
+              phase: p?.designModule?.phases?.[0],
+              enrollment,
+              condition,
+              interventions,
+              endpoints: p?.outcomesModule?.primaryOutcomes,
+            },
           });
         }
       } catch {}
@@ -226,18 +253,25 @@ export class ClinicalTrialsConnector extends BaseConnector {
 
   async extract(doc: RawDocument): Promise<ExtractionResult> {
     const isComplete = doc.text.toLowerCase().includes('completed');
+    const meta = doc.metadata || {};
+    // Use the TRUE lead sponsor (not the searched company) so entity resolution
+    // links the trial to the actual listed issuer. Confidence is raised for an
+    // industry sponsor (leadSponsorClass === 'Industry') and lowered for
+    // academic/NIH sponsors, which are unlikely to map to a public company.
+    const leadSponsor = (meta as any)?.leadSponsor || (meta as any)?.company || 'Trial sponsor';
+    const sponsorConfidence = (meta as any)?.leadSponsorClass === 'Industry' ? 0.85 : 0.5;
     return {
       signals: [{
         source: 'clinicaltrials',
         sourceType: 'clinical_trial',
-        externalId: (doc.metadata as any)?.nctId || doc.canonicalUrl,
+        externalId: (meta as any)?.nctId || doc.canonicalUrl,
         publishedAt: doc.publishedAt,
         retrievedAt: new Date(),
         title: doc.title,
         rawText: doc.text,
         entities: [
-          { name: (doc.metadata as any)?.company || 'Trial sponsor', type: 'company', confidence: 0.65 },
-          { name: (doc.metadata as any)?.nctId || 'Clinical trial', type: 'trial', confidence: 1 },
+          { name: leadSponsor, type: 'company', confidence: sponsorConfidence },
+          { name: (meta as any)?.nctId || 'Clinical trial', type: 'trial', confidence: 1 },
         ],
         eventType: isComplete ? 'clinical_trial_result' : 'clinical_trial_update',
         amounts: [],

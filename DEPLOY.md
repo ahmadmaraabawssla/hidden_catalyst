@@ -60,6 +60,18 @@ node scripts/fmp-updater.js
 
 After deploy, the app is live at `https://hidden-catalyst.vercel.app` (or your custom domain).
 
+### Engine log encoding (Windows)
+
+The engine log (`engine-run.log`) is written in UTF-8. If `cat engine-run.log`
+in a Windows terminal shows mojibake (`â€”` instead of `—`, `âœ“` instead of
+`✓`), the terminal code page is cp1252. Fix it once per session:
+
+```bash
+chcp 65001 >nul
+```
+
+(Or open the log in VS Code, which decodes UTF-8 correctly.)
+
 ### Keep market caps updated
 
 Run locally once per day:

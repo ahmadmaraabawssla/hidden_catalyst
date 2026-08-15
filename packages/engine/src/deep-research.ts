@@ -259,16 +259,32 @@ export class RegulatoryDeepResearcher extends DeterministicResearcher {
   pattern = /fda|regulatory|clinical_trial|clinicaltrials/i;
   summarize(context: DeepResearchContext, signal: DeepResearchSignal, metadata: Record<string, any>) {
     const product = metadata.brand || metadata.generic || metadata.nctId || 'Product or trial';
-    const sponsor = metadata.manufacturer || metadata.company || context.company.companyName || 'Sponsor';
+    // Prefer the TRUE lead sponsor (extracted by the connector) over the searched
+    // company name, so the thesis and facts reference the real issuer.
+    const sponsor = metadata.leadSponsor || metadata.manufacturer || metadata.company || context.company.companyName || 'Sponsor';
+    const phase = metadata.phase || null;
+    const enrollment = metadata.enrollment != null ? Number(metadata.enrollment) : null;
+    const condition = metadata.condition || null;
+    // Structured evidence — phase, enrollment, condition, and sponsor are the
+    // facts that let a reviewer judge novelty/relevance without reading the
+    // registry. Previously only a single fact was returned.
+    const verifiedFacts: DeepResearchFact[] = [
+      { text: `${product}: ${metadata.status || context.clusterType}`, sourceUrl: signal.sourceUrl, confidence: 0.92 },
+    ];
+    if (sponsor !== 'Sponsor') verifiedFacts.push({ text: `Lead sponsor: ${sponsor}`, sourceUrl: signal.sourceUrl, confidence: 0.85 });
+    if (phase) verifiedFacts.push({ text: `Phase: ${phase}`, sourceUrl: signal.sourceUrl, confidence: 0.9 });
+    if (enrollment != null && Number.isFinite(enrollment)) verifiedFacts.push({ text: `Enrollment: ${enrollment.toLocaleString()}`, sourceUrl: signal.sourceUrl, confidence: 0.8 });
+    if (condition) verifiedFacts.push({ text: `Condition: ${condition}`, sourceUrl: signal.sourceUrl, confidence: 0.8 });
+
     return {
       thesis: context.thesis || `${sponsor} has a regulatory or clinical status change involving ${product}.`,
       summary: `${signal.title}. Sponsor, product/trial, phase, status, and record dates were normalized.`,
-      verifiedFacts: [{ text: `${product}: ${metadata.status || context.clusterType}`, sourceUrl: signal.sourceUrl, confidence: 0.92 }],
+      verifiedFacts,
       inferredClaims: [], contradictions: [],
-      missingInputs: unique([!metadata.manufacturer && !metadata.company ? 'Sponsor identity is missing.' : null, !metadata.status && /clinical/i.test(signal.sourceType) ? 'Trial status is missing.' : null, !metadata.phase && /clinical/i.test(signal.sourceType) ? 'Trial phase is missing.' : null]),
-      openQuestions: ['Is the sponsor directly owned by the listed company?', 'Is this a new status change or a refreshed public record?', 'What endpoint or regulatory action changed?'],
+      missingInputs: unique([!metadata.manufacturer && !metadata.leadSponsor && !metadata.company ? 'Sponsor identity is missing.' : null, !metadata.status && /clinical/i.test(signal.sourceType) ? 'Trial status is missing.' : null, !phase && /clinical/i.test(signal.sourceType) ? 'Trial phase is missing.' : null]),
+      openQuestions: ['Is the lead sponsor directly owned by the listed company?', 'Is this a new status change or a refreshed public record?', 'What endpoint or regulatory action changed?'],
       amounts: context.signals.flatMap(amountList), relationshipConfidence: sponsor !== 'Sponsor' ? 75 : 50,
-      attributes: { product, sponsor, phase: metadata.phase, status: metadata.status, nctId: metadata.nctId, applicationNumber: metadata.appNum, endpoints: metadata.endpoints },
+      attributes: { product, sponsor, leadSponsor: metadata.leadSponsor, phase, status: metadata.status, enrollment, condition, nctId: metadata.nctId, applicationNumber: metadata.appNum, endpoints: metadata.endpoints },
       evidenceUrls: [signal.sourceUrl],
     };
   }

@@ -326,6 +326,37 @@ export async function createCatalystClusterFromSignal(signalId: string) {
   if (!signal) throw new Error(`Signal ${signalId} not found`);
 
   const entityKey = normalizedEntityKey(signal.entities);
+
+  // ── Tier 0: same source record ──
+  // The same underlying record (same NCT, accession number, or award ID) is the
+  // SAME catalyst regardless of how its eventType changed between harvests
+  // (e.g. a trial's `clinical_trial_update` → `clinical_trial_result`, or an
+  // award amendment). Consolidate by externalId first so a re-harvested record
+  // merges into its existing cluster instead of spawning a duplicate.
+  const externalId = signal.externalId || null;
+  if (externalId) {
+    const byRecord = await prisma.catalystCluster.findFirst({
+      where: { signals: { some: { signal: { externalId } } } },
+      include: { signals: { include: { signal: true } } },
+      orderBy: { firstSeenAt: 'desc' },
+    });
+    if (byRecord) {
+      await prisma.catalystClusterSignal.upsert({
+        where: { clusterId_signalId: { clusterId: byRecord.id, signalId } },
+        update: { role: 'corroborating', confidence: 0.85 },
+        create: { clusterId: byRecord.id, signalId, role: 'corroborating', confidence: 0.85 },
+      });
+      await prisma.catalystCluster.update({
+        where: { id: byRecord.id },
+        data: {
+          priorityScore: Math.max(byRecord.priorityScore || 0, signal.triageScore || 0),
+          status: byRecord.status === 'rejected' ? 'triaged' : byRecord.status,
+        },
+      });
+      return byRecord;
+    }
+  }
+
   const candidates = await prisma.catalystCluster.findMany({
     where: {
       clusterType: signal.eventType || signal.sourceType,
