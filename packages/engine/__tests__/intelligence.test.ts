@@ -139,7 +139,7 @@ describe('buildResearchReport', () => {
 
     expect(report.rejectedClaims.some((claim) => claim.text.includes('Spot stock price'))).toBe(true);
     expect(report.unverifiedClaims.some((claim) => claim.text.includes('settled in shares'))).toBe(true);
-    expect(report.unverifiedClaims.some((claim) => claim.text.includes('Financial materiality'))).toBe(true);
+    expect(report.unverifiedClaims.some((claim) => claim.text.includes('Economic significance'))).toBe(true);
     expect(report.unverifiedClaims.some((claim) => claim.text.includes('overlooked'))).toBe(true);
     expect(report.thesisStatus).toBe('watch');
     expect(report.scenarioTables[0].rows.length).toBeGreaterThan(0);

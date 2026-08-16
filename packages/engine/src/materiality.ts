@@ -176,6 +176,15 @@ function computeClinicalMateriality(input: MaterialityInput): MaterialityResult 
   } else if (statusChange && isPhase2) {
     level = 'LOW';
     note = `Phase 2 status change (${status}).`;
+  } else if (/APPROVED|CLEARED|CLEARANCE/.test(status)) {
+    // ── FDA approval / clearance is a value event REGARDLESS of phase ──
+    // An approval has no "phase"; the approval IS the material event. A first
+    // product approval can be worth the whole company for a small drugmaker,
+    // so it must not be classified IMMATERIAL just because there is no
+    // clinical phase field. (Regulatory approval of a generic/me-too may be
+    // smaller, but "material" is the right default for a commercial event.)
+    level = 'LOW';
+    note = `Regulatory approval/clearance (${status}).`;
   } else if (isPhase3) {
     level = 'LOW';
     note = `Phase 3 trial (${status || 'status unknown'}).`;

@@ -751,11 +751,21 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   });
 
   if (security) {
+    // ── Canonical state mapping (single source of truth) ──
+    // The reviewer flagged `thesis=watch` persisting as `status=candidate` — a
+    // dual-interpretation bug. Map ONE thesis status → ONE lifecycle status so
+    // the two fields can never disagree:
+    //   watch     → needs_review  (research queue / "On our radar")
+    //   candidate → candidate     (discovery feed / "Worth a look")
+    //   verified  → published     (discovery feed)
+    //   reject    → rejected
     const opportunityStatus = researchReport.thesisStatus === 'reject'
       ? 'rejected'
       : researchReport.thesisStatus === 'verified'
         ? 'published'
-        : 'candidate';
+        : researchReport.thesisStatus === 'candidate'
+          ? 'candidate'
+          : 'needs_review';
     // Map engine thesis status ('reject') to the DB's user-facing value
     // ('rejected') — the verification_status column only allows 'rejected'.
     const verificationStatus = researchReport.thesisStatus === 'reject' ? 'rejected' : researchReport.thesisStatus;

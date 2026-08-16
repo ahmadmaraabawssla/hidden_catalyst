@@ -15,10 +15,10 @@
 export type CatalystDirection = 'positive' | 'negative' | 'mixed' | 'unclear';
 
 const NEGATIVE_TYPE = /liability|true.?up|warrant|dilution|financing|default|deficiency|reverse.?split|delist|insolvency|bankrupt|going.?concern|impairment|charge|write.?off|recall|litigation|lawsuit|subpoena|investigation|restatement|foreclosure|acceleration/;
-const NEGATIVE_TEXT = /default liability|settlement default|true.?up|commitment fee price|pre.?funded warrant|reverse split|deficiency notice|delist|going concern|impairment|charge|write.?off|recall|lawsuit|litigation|subpoena|investigation|default under|acceleration|foreclosure|bankrupt|insolven/;
+const NEGATIVE_TEXT = /default liability|settlement default|true.?up|commitment fee price|pre.?funded warrant|reverse split|deficiency notice|delist|going concern|impairment|charge|write.?off|recall|lawsuit|litigation|subpoena|investigation|default under|acceleration|foreclosure|bankrupt|insolven|dilut|convertible into|overhang|may settle in shares/;
 
-const POSITIVE_TYPE = /contract_award|award|grant|approval|patent|clearance|designation|partnership|expansion|customer|backlog|order/;
-const POSITIVE_TEXT = /award|contract|grant|approval|patent|clearance|designation|partnership|expansion|customer win|new order|backlog|buyback|dividend|acquisition of|merger agreement/;
+const POSITIVE_TYPE = /contract_award|award|grant|approval|patent|clearance|designation|partnership|expansion|customer|backlog|order|acquisition/;
+const POSITIVE_TEXT = /award|contract|grant|approval|patent|clearance|designation|partnership|expansion|customer win|new order|backlog|buyback|dividend|acquisition|positive|superior|completed|primary endpoint|approved/;
 
 /**
  * Deterministically infer the economic sign of a catalyst from its event type

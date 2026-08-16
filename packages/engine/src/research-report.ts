@@ -368,7 +368,10 @@ function statusFromReport(args: {
   if (!args.hasPrimaryEvidence || args.adversarial.fatalContradiction) {
     return { status: 'reject' as ThesisStatus, reasons };
   }
-  if (!args.hasThesis || args.materiality.ratio == null || args.completeness < 60) {
+  // Watch gate: only UNRESOLVED materiality blocks promotion. A clinical event
+  // with qualitative LOW/MODERATE significance has a KNOWN level (no dollar
+  // ratio) — it must be promotable, not stuck in watch for lacking a number.
+  if (!args.hasThesis || args.materiality.level === 'UNKNOWN' || args.completeness < 60) {
     return { status: 'watch' as ThesisStatus, reasons };
   }
   if (args.completeness >= 85 && args.materiality.level !== 'LOW' && args.relationshipConfidence >= 85 && args.adversarial.confidencePenalty < 20) {
@@ -398,13 +401,23 @@ export function buildResearchReport(input: ResearchReportInput): ResearchReport 
     });
   }
 
-  if (input.materiality.ratio == null) {
+  // ── Economic significance (source-agnostic wording) ──
+  // For monetary events (contracts, financing) this is a dollar ratio; for
+  // clinical/regulatory events it is a qualitative stage/status assessment.
+  // The claim wording must not assume a financial-ratio framework, otherwise a
+  // Phase 3 status change reads as "denominator missing" when the economic
+  // mechanism never had a denominator. Only flag an unverified significance
+  // when the materiality level is genuinely UNKNOWN — a known LOW/MODERATE
+  // clinical significance is a real assessment, not a missing input.
+  if (input.materiality.level === 'UNKNOWN') {
     unverifiedClaims.push({
       status: 'unverified',
-      text: 'Financial materiality is quantified.',
-      reason: input.materiality.denominator != null
-        ? 'Event amount (market opportunity / contract value) is missing, so no ratio can be computed.'
-        : 'Materiality denominator is missing.',
+      text: 'Economic significance is assessed.',
+      reason: /clinical|trial|fda|approval|drug|regulatory/.test(input.eventType.toLowerCase())
+        ? 'Clinical stage, status change, or asset importance has not been resolved.'
+        : input.materiality.denominator != null
+          ? 'Event amount (market opportunity / contract value) is missing, so no ratio can be computed.'
+          : 'Materiality denominator is missing.',
     });
   }
   if (!input.attentionMeasured) {
