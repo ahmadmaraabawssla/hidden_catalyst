@@ -5,8 +5,9 @@ const { setApiKey, extractFromFiling } = require('./llm-extractor.js') as {
   setApiKey: (key?: string) => void;
   extractFromFiling: (...args: unknown[]) => Promise<Record<string, any> | null>;
 };
-const { resolveDefinedTerms } = require('./cdr.js') as {
+const { resolveDefinedTerms, findAgreementReferences } = require('./cdr.js') as {
   resolveDefinedTerms: (text: string, cik: string) => Promise<{ context?: string; terms?: Record<string, unknown> }>;
+  findAgreementReferences: (text: string) => Array<{ dateStr?: string; description?: string }>;
 };
 import { inferDirection, type CatalystDirection } from './direction';
 
@@ -211,15 +212,23 @@ export class SecDeepResearcher implements DeepResearcher {
     let resolvedTerms: Record<string, unknown> = {};
     let referencedDocumentUnresolved = false;
     const cik = String(metadata.cik || context.company.cik || '');
-    if (cik && /purchase\s+agreement|defined\s+in\s+the|amends\s+the|as\s+defined|referenced\s+agreement/i.test(filingText)) {
+    // Only attempt cross-document resolution when the filing has an ACTUAL
+    // agreement reference (a dated agreement citation). A bare "as defined in
+    // the" phrase is boilerplate that appears in nearly every filing and does
+    // NOT mean a referenced agreement needs resolving — treating it as one
+    // produced "referenced document unresolved" on routine 10-Qs/8-Ks that
+    // never cited anything. Use the same detector the resolver uses, so the
+    // flag only fires when there is a genuine, dated reference.
+    const hasAgreementReference = findAgreementReferences(filingText).length > 0;
+    if (cik && hasAgreementReference) {
       try {
         const resolved = await resolveDefinedTerms(filingText.slice(0, 20_000), cik);
         crossDocumentContext = resolved.context || '';
         resolvedTerms = resolved.terms || {};
         // ── Distinguish "examined, no terms" from "could not retrieve" ──
-        // If the filing references a defined agreement but no terms were resolved,
-        // that is an epistemic gap — the answer lives in a document we could not
-        // pull. Surface it as an explicit unresolved state, not a silent terms=0.
+        // Only mark unresolved when there WAS a real reference but we could not
+        // pull terms. A successful retrieval (even with zero extractable terms)
+        // is logged as "resolved" — the document was examined.
         referencedDocumentUnresolved = Object.keys(resolvedTerms).length === 0 && !crossDocumentContext;
         context.log?.(
           referencedDocumentUnresolved ? 'SEC referenced document unresolved' : 'resolved SEC cross-document terms',
