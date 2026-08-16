@@ -532,6 +532,45 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   } else if (resolution.tier === 'unresolved') {
     logger.log(`[research] cluster=${clusterId} entity_resolution=unresolved name="${String(companyName)}" — no listed parent found (sponsor/subsidiary/product may be non-public)`);
   }
+
+  // ── P1: stop early for unresolved entities ──
+  // If the source entity has no resolvable listed parent (university, private
+  // pharma, research network), there is no investable thesis — spending the
+  // deep-research budget (LLM), Finnhub attention, and FMP price-reaction calls
+  // on it is pure waste. Mark the cluster rejected so it stops re-consuming a
+  // scheduling slot every pass, and return without running any research.
+  if (resolution.tier === 'unresolved' && !security) {
+    await prisma.catalystCluster.update({
+      where: { id: clusterId },
+      data: { status: 'rejected', lastEvaluatedAt: new Date() },
+    });
+    const skipLog: ResearchEvaluationLog = {
+      clusterId,
+      title: cluster.title,
+      signalCount: cluster.signals.length,
+      thesisStatus: 'reject',
+      finalStatus: 'rejected',
+      completeness: 0,
+      confidence: 0,
+      materialityLevel: 'UNKNOWN',
+      materialityMetric: 'unresolved entity',
+      rejectedClaims: 1,
+      unverifiedClaims: 0,
+      checks: {},
+      pendingChecks: ['Public-company resolution: no listed parent found.'],
+    };
+    return {
+      clusterId,
+      materiality: null,
+      adversarial: null,
+      qualification: { status: 'reject' as const, reasons: ['Unresolved public security — no listed parent.'] },
+      researchReport: { thesisStatus: 'reject' as const },
+      deepResearch: null,
+      completeness: 0,
+      log: skipLog,
+    };
+  }
+
   const securityAttributes = jsonObject(security?.attributes);
   // Financial denominators (revenue/cash/assets/shares) drive materiality.
   // Enrich on demand from FMP when they are missing, and cache the result
@@ -541,6 +580,17 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   let assets = Number(securityAttributes.assets || 0) || null;
   let currentShares = Number(securityAttributes.currentShares || 0) || null;
   let enterpriseValue = Number(securityAttributes.enterpriseValue || 0) || null;
+
+  // ── P0 guard (defense-in-depth on the read path) ──
+  // Reject a cached cash figure that exceeds total assets (cash is a subset of
+  // assets). Older runs persisted FMP's thousands-unit corruption (KOPN cash
+  // $61.6B vs assets $108M). Recover a clean ÷1000 units error, else null it so
+  // the materiality denominator degrades to UNKNOWN rather than corrupting the
+  // "liability / cash" ratio or producing a bogus negative enterprise value.
+  if (cash != null && assets != null) {
+    if (cash > assets && cash / 1000 <= assets * 1.05) cash = cash / 1000;
+    else if (cash > assets) cash = null;
+  }
 
   if (security && revenue == null && cash == null && assets == null && currentShares == null) {
     const enriched = await enrichFinancialDenominators(security);

@@ -176,6 +176,11 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
   const definedVariable = hasDefinedPriceVariable(combined);
   const hasMaterialityDenominator = input.materiality.denominator != null;
   const hasMaterialityRatio = input.materiality.ratio != null;
+  // Source-aware: clinical/regulatory events are sized by stage + status change,
+  // not a dollar amount. Detect that path so the checklist asks the right
+  // questions instead of "amount / revenue" (which is meaningless for a trial).
+  const isClinical = input.materiality.metric === 'clinical stage / status';
+  const clinicalAssessed = input.materiality.level !== 'UNKNOWN';
 
   return [
     {
@@ -198,11 +203,17 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
     },
     {
       id: 'amount_or_mechanism',
-      status: hasAmount || /formula|true-up|award|approval|contract/i.test(combined) ? 'verified' : 'pending',
+      status: isClinical
+        ? (clinicalAssessed ? 'verified' : 'pending')
+        : (hasAmount || /formula|true-up|award|approval|contract/i.test(combined) ? 'verified' : 'pending'),
       source: input.signals[0]?.sourceType || 'Signal text',
-      check: 'Economic mechanism identified',
-      result: hasAmount ? 'Dollar amount extracted from source signal' : 'Mechanism detected; amount still needs extraction',
-      why: 'A catalyst needs a testable economic mechanism.',
+      check: isClinical ? 'Clinical stage / status assessed' : 'Economic mechanism identified',
+      result: isClinical
+        ? (clinicalAssessed ? input.materiality.explanation : 'Trial phase and status change not yet resolved')
+        : (hasAmount ? 'Dollar amount extracted from source signal' : 'Mechanism detected; amount still needs extraction'),
+      why: isClinical
+        ? 'A clinical catalyst is sized by phase, status change, and enrollment — not a dollar amount.'
+        : 'A catalyst needs a testable economic mechanism.',
     },
     {
       id: 'defined_variable_guardrail',
@@ -214,15 +225,21 @@ function buildChecks(input: ResearchReportInput, combined: string): ResearchChec
     },
     {
       id: 'materiality_denominator',
-      status: hasMaterialityRatio ? 'verified' : hasMaterialityDenominator ? 'partial' : 'pending',
-      source: 'Financial statements / market data',
-      check: 'Materiality denominator checked',
-      result: hasMaterialityRatio
-        ? input.materiality.explanation
-        : hasMaterialityDenominator
-          ? 'Denominator present (revenue/cash/assets/EV), but event amount (market opportunity) still needs extraction'
-          : 'Cash, revenue, assets, EV, market cap, or share denominator missing',
-      why: 'A dollar amount is only material relative to company scale.',
+      status: isClinical
+        ? (clinicalAssessed ? 'verified' : 'pending')
+        : (hasMaterialityRatio ? 'verified' : hasMaterialityDenominator ? 'partial' : 'pending'),
+      source: isClinical ? 'ClinicalTrials.gov registry' : 'Financial statements / market data',
+      check: isClinical ? 'Economic significance assessed' : 'Materiality denominator checked',
+      result: isClinical
+        ? (clinicalAssessed ? input.materiality.explanation : 'Clinical significance could not be assessed (no phase or status change)')
+        : (hasMaterialityRatio
+          ? input.materiality.explanation
+          : hasMaterialityDenominator
+            ? 'Denominator present (revenue/cash/assets/EV), but event amount (market opportunity) still needs extraction'
+            : 'Cash, revenue, assets, EV, market cap, or share denominator missing'),
+      why: isClinical
+        ? 'A clinical catalyst is material relative to its pipeline importance, not company revenue.'
+        : 'A dollar amount is only material relative to company scale.',
     },
     {
       id: 'attention',
@@ -304,7 +321,13 @@ function statusFromReport(args: {
   const reasons: string[] = [];
   if (!args.hasPrimaryEvidence) reasons.push('No primary public evidence linked.');
   if (!args.hasThesis) reasons.push('No thesis identified.');
-  if (args.materiality.ratio == null) reasons.push(args.materiality.denominator != null ? 'Event amount (market opportunity) missing.' : 'Materiality denominator missing.');
+  // Only report a missing denominator/amount for FINANCIAL events. A clinical
+  // event has no dollar amount by design — its significance lives in
+  // phase/status, so "materiality denominator missing" is nonsensical there.
+  const isQualitativeClinical = args.materiality.metric === 'clinical stage / status';
+  if (!isQualitativeClinical && args.materiality.ratio == null) {
+    reasons.push(args.materiality.denominator != null ? 'Event amount (market opportunity) missing.' : 'Materiality denominator missing.');
+  }
   if (args.relationshipConfidence < 70) reasons.push('Relationship confidence below threshold.');
   if (args.completeness < 60) reasons.push('Research completeness below candidate threshold.');
   if (args.adversarial.fatalContradiction) reasons.push('Fatal contradiction detected.');

@@ -62,9 +62,30 @@ export async function enrichFinancialDenominators(
     const revenue = numberOrNull(income?.revenue);
     // cashAndShortTermInvestments is the broadest cash measure and already
     // includes cashAndCashEquivalents — use it directly, do not sum both.
-    const cash = numberOrNull(balance?.cashAndShortTermInvestments ?? balance?.cashAndCashEquivalents);
+    const rawCash = numberOrNull(balance?.cashAndShortTermInvestments ?? balance?.cashAndCashEquivalents);
     const assets = numberOrNull(balance?.totalAssets);
     const totalDebt = numberOrNull(balance?.totalDebt);
+
+    // ── P0 guard: cash cannot exceed total assets ──
+    // FMP occasionally returns cashAndShortTermInvestments in THOUSANDS while
+    // totalAssets is in dollars (observed on KOPN: cash $61.6B vs assets $108M;
+    // PBT: cash $1.7B vs assets $1.9M). A corrupted cash figure flows straight
+    // into "liability / cash" materiality and into a bogus negative enterprise
+    // value. Cash is a strict subset of assets, so `cash > assets` is impossible
+    // — detect it and recover the units error (÷1000) when that makes the value
+    // plausible, otherwise null it so the denominator degrades to UNKNOWN
+    // instead of corrupting the ratio.
+    let cash = rawCash;
+    if (cash != null && assets != null) {
+      if (cash > assets && cash / 1000 <= assets * 1.05) {
+        // Units error: FMP reported in thousands (e.g. 61,627,146,000 → $61.6M).
+        cash = cash / 1000;
+      } else if (cash > assets) {
+        // Implausible and not a clean units error — do not trust it.
+        cash = null;
+      }
+    }
+
     const currentShares = numberOrNull(income?.weightedAverageShsOutDil ?? income?.weightedAverageShsOut);
     const marketCap = security.marketCap ?? null;
     const enterpriseValue =
