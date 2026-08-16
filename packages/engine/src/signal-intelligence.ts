@@ -84,14 +84,25 @@ function sourceTypesForFamily(family: string): string[] {
  * plus the most distinctive title tokens.
  */
 function extractKeywords(title: string, companyName?: string): string[] {
-  const stop = new Set(['the', 'and', 'for', 'with', 'from', 'inc', 'corp', 'llc', 'ltd', 'co', 'company', 'corporation', 'new', 'update', 'federal', 'contract']);
+  const stop = new Set(['the', 'and', 'for', 'with', 'from', 'inc', 'corp', 'llc', 'ltd', 'co', 'company', 'corporation', 'new', 'update', 'federal', 'contract', 'study', 'trial', 'evaluate', 'efficacy', 'safety', 'clinical']);
+  const keywords = new Set<string>();
+  if (companyName) keywords.add(String(companyName).toLowerCase());
+
+  // Preserve hyphenated drug/compound codes (AVP-786, CA-4948, LY3502970) and
+  // NCT/patent identifiers verbatim — these are the MOST distinctive catalyst
+  // terms, and naive tokenization would split them into sub-4-char fragments
+  // that get filtered out, leaving only the generic words.
+  const codes = String(title || '').match(/\b[A-Z]{2,4}-?\d{2,}\b/g) || [];
+  for (const code of codes) {
+    if (keywords.size >= 8) break;
+    keywords.add(code.toLowerCase());
+  }
+
   const tokens = String(title || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .split(' ')
     .filter((word) => word.length >= 4 && !stop.has(word));
-  const keywords = new Set<string>();
-  if (companyName) keywords.add(String(companyName).toLowerCase());
   for (const token of tokens) {
     if (keywords.size >= 8) break;
     keywords.add(token);
@@ -627,11 +638,11 @@ export async function evaluateClusterForOpportunity(clusterId: string, options?:
   // ── Attention + event-window price reaction (best-effort, cached) ──
   let attentionProfile = jsonObject(cluster.attentionJson) as any;
   let priceReaction = jsonObject(cluster.priceReactionJson) as any;
-  if (security && !attentionProfile?.attentionScore) {
+  if (security && !attentionProfile?.attentionStatus) {
     try {
       const keywords = extractKeywords(cluster.title, companyContext.companyName);
       attentionProfile = await measureAttention(security.ticker, process.env.FMP_API_KEY, security.marketCap, keywords);
-      logger.log(`[research] cluster=${clusterId} attention=${attentionProfile.attentionScore} measured=${attentionProfile.measured} pressRelease=${attentionProfile.pressRelease?.found} news=${attentionProfile.news?.count} source=${attentionProfile.source}`);
+      logger.log(`[research] cluster=${clusterId} attentionStatus=${attentionProfile.attentionStatus} proxy=${attentionProfile.companyAttentionProxy} catalystNews=${attentionProfile.news?.count} companyNews=${attentionProfile.companyNewsTotal} pressRelease=${attentionProfile.pressRelease?.found} source=${attentionProfile.source}`);
     } catch {
       attentionProfile = null;
     }

@@ -137,7 +137,7 @@ export default async function FeedPage({ searchParams }: { searchParams: Record<
                     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${
                       attention.measured ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'
                     }`}>
-                      {attention.measured ? 'News found' : 'Attention not measured'}
+                      {attention.measured ? `News: ${attention.news.count}` : 'Attention unknown'}
                     </span>
                   )}
 

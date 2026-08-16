@@ -43,9 +43,14 @@ export interface MaterialityResult {
 }
 
 export interface AttentionProfile {
-  attentionScore: number;
+  /** Company-level proxy (market-cap/ticker derived), NOT catalyst-specific. */
+  companyAttentionProxy: number;
+  /** Total company news articles in the last 7 days (context). */
+  companyNewsTotal: number;
+  /** Catalyst-specific news matches. */
   measured: boolean;
-  source: 'fmp' | 'estimate';
+  attentionStatus: 'measured' | 'unknown';
+  source: 'finnhub' | 'estimate';
   pressRelease: { found: boolean; count: number; headlines: string[] };
   news: { count: number; sentiment: number };
 }
@@ -229,9 +234,11 @@ function parseAttention(value: unknown): AttentionProfile | null {
   const pr = jsonOrNull<Record<string, unknown>>(raw.pressRelease);
   const news = jsonOrNull<Record<string, unknown>>(raw.news);
   return {
-    attentionScore: asNumber(raw.attentionScore) ?? 0,
+    companyAttentionProxy: asNumber(raw.companyAttentionProxy) ?? asNumber(raw.attentionScore) ?? 0,
+    companyNewsTotal: asNumber(raw.companyNewsTotal) ?? 0,
     measured: asBool(raw.measured),
-    source: (raw.source as 'fmp' | 'estimate') || 'estimate',
+    attentionStatus: (raw.attentionStatus as 'measured' | 'unknown') || (asBool(raw.measured) ? 'measured' : 'unknown'),
+    source: (raw.source as 'finnhub' | 'estimate') || 'estimate',
     pressRelease: {
       found: asBool(pr?.found),
       count: asNumber(pr?.count) ?? 0,

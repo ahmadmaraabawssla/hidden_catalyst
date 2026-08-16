@@ -203,8 +203,10 @@ export default async function OpportunityDetailPage({ params }: { params: { id: 
             <h2 className="mb-2 text-base font-semibold text-gray-900">Is anyone paying attention?</h2>
             <p className="text-sm text-gray-700">
               {attention.measured
-                ? `Yes — we found ${attention.news.count} news mentions in the last week, so it may already be on people's radar.`
-                : 'We haven\'t been able to measure catalyst-specific coverage — so we treat attention as unknown, not as "overlooked".'}
+                ? `Yes — we found ${attention.news.count} news mention${attention.news.count === 1 ? '' : 's'} about this specific event in the last week, so it may already be on people's radar.`
+                : attention.companyNewsTotal > 0
+                  ? `We found ${attention.companyNewsTotal} articles about the company, but none about this specific event — so catalyst attention is unknown, not "overlooked".`
+                  : 'We haven\'t been able to measure catalyst-specific coverage — so we treat attention as unknown, not as "overlooked".'}
             </p>
           </div>
         )}

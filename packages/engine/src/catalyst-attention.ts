@@ -1,15 +1,26 @@
 /**
- * Catalyst Attention Measurement (v4e)
+ * Catalyst Attention Measurement
  *
- * Measures how much attention a specific event is getting:
- * 1. Press release check: did the company issue a formal PR?
- * 2. Media coverage: how many financial news outlets covered it?
- * 3. Attention score: 0-100, inverted (higher = more overlooked/less attention)
+ * Measures whether the SPECIFIC event (a given trial, contract award, FDA
+ * decision, filing) is being talked about — not just whether the company has
+ * generic coverage. This is the "hidden" in Hidden Catalyst: a catalyst is only
+ * information-asymmetry if the market has NOT already priced it in via coverage.
  *
- * The score is INVERTED for the Info Asymmetry metric:
- * - Low attention → high info asymmetry score → opportunity
- * - High attention → low info asymmetry score → already priced in
+ * Epistemic discipline (the core contract):
+ *   - `attentionStatus = 'measured'` ONLY when catalyst-specific coverage was
+ *     actually observed (a matching press release, or news articles whose
+ *     headline/summary mention the catalyst's own terms).
+ *   - `attentionStatus = 'unknown'` otherwise. A company with 50 generic
+ *     articles but ZERO about *this event* is UNKNOWN for the catalyst — NOT
+ *     "overlooked" (we have no evidence the market ignored it; we just haven't
+ *     matched it).
+ *   - The company-level proxy (market-cap + ticker derived) is stored SEPARATELY
+ *     as `companyAttentionProxy` and must never be treated as measured evidence.
+ *
+ * "no articles returned → overlooked" is a false inference. No match → unknown.
  */
+
+import { countNews7d } from '@hidden-catalyst/connectors';
 
 const FMP_BASE = 'https://financialmodelingprep.com/api/v3';
 
@@ -20,6 +31,7 @@ export interface PressReleaseCheck {
 }
 
 export interface NewsMentions {
+  /** Articles whose headline/summary mention a catalyst keyword (catalyst-specific). */
   count: number;
   sentiment: number;
 }
@@ -28,17 +40,20 @@ export interface AttentionProfile {
   /**
    * Numeric company-attention PROXY only (market-cap + ticker-derived). This is
    * NOT catalyst-specific attention and must never be treated as measured
-   * evidence. Keep it named explicitly so future code cannot mistake a "90"
+   * evidence. Kept named explicitly so future code cannot mistake a "90"
    * proxy for "highly overlooked" proof.
    */
-  attentionScore: number;
+  companyAttentionProxy: number;
+  /** Total company news articles in the last 7 days (context — NOT the catalyst). */
+  companyNewsTotal: number;
+  /** News articles matching the catalyst's own terms in the last 7 days. */
   pressRelease: PressReleaseCheck;
   news: NewsMentions;
-  source: 'fmp' | 'estimate';
+  source: 'finnhub' | 'estimate';
   /**
    * True only when catalyst-specific attention was actually observed
-   * (a matching press release or recent news mentions). False when the
-   * score is a market-cap-derived proxy with no observed coverage.
+   * (a matching press release or a catalyst-keyword news match). False when
+   * only the company-level proxy is available.
    */
   measured: boolean;
   /**
@@ -51,7 +66,9 @@ export interface AttentionProfile {
 
 /**
  * Check if the company issued a press release for a specific event.
- * Looks at FMP press releases endpoint for the ticker.
+ * Looks at FMP press releases endpoint for the ticker and keyword-matches.
+ * (Best-effort — the FMP Starter plan may 403 this endpoint; the Finnhub news
+ * match is the primary catalyst-specific signal.)
  */
 export async function checkPressReleases(
   ticker: string,
@@ -85,52 +102,13 @@ export async function checkPressReleases(
 }
 
 /**
- * Count financial news articles mentioning the company in the last 7 days.
- */
-export async function countNewsMentions(
-  ticker: string,
-  apiKey: string | undefined
-): Promise<NewsMentions> {
-  try {
-    if (!apiKey) return { count: 0, sentiment: 0 };
-    const res = await fetch(
-      `${FMP_BASE}/stock_news?tickers=${ticker}&limit=50&apikey=${apiKey}`,
-      { signal: AbortSignal.timeout(6000) }
-    );
-    if (!res.ok) return { count: 0, sentiment: 0 };
-    const data = await res.json();
-    if (!Array.isArray(data)) return { count: 0, sentiment: 0 };
-
-    const weekAgo = Date.now() - 7 * 86400000;
-    let count = 0;
-    let totalSentiment = 0;
-    for (const item of data) {
-      const publishedDate = item.publishedDate ? new Date(item.publishedDate as string).getTime() : 0;
-      if (publishedDate > weekAgo) {
-        count++;
-        totalSentiment += parseFloat(item.sentiment as string) || 0;
-      }
-    }
-
-    return {
-      count,
-      sentiment: count > 0 ? totalSentiment / count : 0,
-    };
-  } catch {
-    return { count: 0, sentiment: 0 };
-  }
-}
-
-/**
- * Compute the catalyst attention score (inverted: high score = LOW attention = overlooked).
- *
- * Input: market cap (smaller = less attention), press release found, news count
- * Output: 5-95 score where 95 = completely overlooked, 5 = heavily covered
+ * Compute the company-attention PROXY (inverted: high = small/underfollowed).
+ * This is market-cap + ticker derived and is NOT catalyst-specific. It exists
+ * only as a fallback signal for ranking; it must never be presented as
+ * "measured" attention.
  */
 export function computeAttentionScore(
   marketCap: number | null,
-  pressReleaseFound: boolean,
-  newsCount: number,
   ticker: string
 ): number {
   let base: number;
@@ -144,14 +122,6 @@ export function computeAttentionScore(
   else if (mc < 10e9) base = 25;
   else base = 15;
 
-  if (pressReleaseFound) base -= 20;
-
-  if (newsCount > 20) base -= 20;
-  else if (newsCount > 10) base -= 12;
-  else if (newsCount > 5) base -= 8;
-  else if (newsCount > 2) base -= 4;
-  else base += 5; // Bonus for very few articles
-
   if (ticker && ticker.length > 4) base += 5;
 
   return Math.max(5, Math.min(95, Math.round(base)));
@@ -159,7 +129,11 @@ export function computeAttentionScore(
 
 /**
  * Full catalyst attention measurement for a company + event.
- * Runs all checks and returns a comprehensive attention profile.
+ *
+ * The catalyst-specific signal is Finnhub `company-news` keyword-matched against
+ * the event's own terms (drug name, contract agency, filing keyword). A zero
+ * match is `unknown`, not "overlooked". The company-level proxy is returned
+ * separately and never conflated with the measured signal.
  */
 export async function measureAttention(
   ticker: string,
@@ -167,9 +141,12 @@ export async function measureAttention(
   marketCap: number | null,
   keywords: string[]
 ): Promise<AttentionProfile> {
-  if (!apiKey || !ticker) {
+  const proxy = computeAttentionScore(marketCap ?? 800_000_000, ticker);
+
+  if (!ticker) {
     return {
-      attentionScore: computeAttentionScore(marketCap ?? 800000000, false, 0, ticker),
+      companyAttentionProxy: proxy,
+      companyNewsTotal: 0,
       pressRelease: { found: false, count: 0, headlines: [] },
       news: { count: 0, sentiment: 0 },
       source: 'estimate',
@@ -178,22 +155,23 @@ export async function measureAttention(
     };
   }
 
-  const [pressRelease, news] = await Promise.all([
+  // Catalyst-specific news match via Finnhub (keyword-matched) + press release check.
+  const [newsCount, pressRelease] = await Promise.all([
+    countNews7d(ticker, keywords || []),
     checkPressReleases(ticker, apiKey, keywords || []),
-    countNewsMentions(ticker, apiKey),
   ]);
 
-  const score = computeAttentionScore(marketCap ?? 800000000, pressRelease.found, news.count, ticker);
+  const catalystMatches = newsCount.available ? newsCount.catalystMatches : 0;
+  const companyTotal = newsCount.available ? newsCount.total7d : 0;
+  const measured = pressRelease.found || catalystMatches > 0;
 
   return {
-    attentionScore: score,
+    companyAttentionProxy: proxy,
+    companyNewsTotal: companyTotal,
     pressRelease,
-    news,
-    source: 'fmp',
-    // Only count as "measured" when we actually observed catalyst-specific
-    // coverage — a matching press release or recent news mentions. A
-    // market-cap-only score with zero coverage is a proxy, not a measurement.
-    measured: pressRelease.found || news.count > 0,
-    attentionStatus: (pressRelease.found || news.count > 0) ? 'measured' : 'unknown',
+    news: { count: catalystMatches, sentiment: 0 },
+    source: 'finnhub',
+    measured,
+    attentionStatus: measured ? 'measured' : 'unknown',
   };
 }
