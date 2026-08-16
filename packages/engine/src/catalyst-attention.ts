@@ -36,6 +36,30 @@ export interface NewsMentions {
   sentiment: number;
 }
 
+/**
+ * The epistemic contract of catalyst attention, as a PURE function so it can be
+ * tested without network access. Given the observed catalyst-specific matches,
+ * classify whether attention was actually MEASURED or is UNKNOWN.
+ *
+ * The single most important rule, enforced here:
+ *   - measured: at least one catalyst-specific match (a matching press release,
+ *     or a news article whose headline/summary mentions the catalyst's terms).
+ *   - unknown: NO catalyst-specific match — REGARDLESS of how many generic
+ *     company articles exist. A company with 50 generic articles but zero about
+ *     *this event* is UNKNOWN, not "overlooked". We have no evidence the market
+ *     ignored the catalyst; we merely failed to match it.
+ *
+ * There is deliberately NO "overlooked" output. That inference is only valid
+ * once catalyst-specific matching exists and returns a verified zero.
+ */
+export function classifyAttention(args: {
+  catalystMatches: number;
+  pressReleaseFound: boolean;
+}): { measured: boolean; attentionStatus: 'measured' | 'unknown' } {
+  const measured = args.pressReleaseFound || args.catalystMatches > 0;
+  return { measured, attentionStatus: measured ? 'measured' : 'unknown' };
+}
+
 export interface AttentionProfile {
   /**
    * Numeric company-attention PROXY only (market-cap + ticker-derived). This is
@@ -163,7 +187,10 @@ export async function measureAttention(
 
   const catalystMatches = newsCount.available ? newsCount.catalystMatches : 0;
   const companyTotal = newsCount.available ? newsCount.total7d : 0;
-  const measured = pressRelease.found || catalystMatches > 0;
+  const { measured, attentionStatus } = classifyAttention({
+    catalystMatches,
+    pressReleaseFound: pressRelease.found,
+  });
 
   return {
     companyAttentionProxy: proxy,
@@ -172,6 +199,6 @@ export async function measureAttention(
     news: { count: catalystMatches, sentiment: 0 },
     source: 'finnhub',
     measured,
-    attentionStatus: measured ? 'measured' : 'unknown',
+    attentionStatus,
   };
 }
