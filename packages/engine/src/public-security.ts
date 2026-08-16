@@ -87,6 +87,26 @@ export async function resolvePublicSecurity(args: {
   const name = args.companyName;
   if (!name || String(name).trim().length < 2) return unresolved;
 
+  // ── Parent-company extraction ──
+  // Source records often embed the corporate parent inline, e.g.
+  // "Acceleron Pharma, Inc., a wholly-owned subsidiary of Merck & Co., Inc."
+  // Resolve the PARENT (the listed entity that owns the economic interest),
+  // not the subsidiary name that won't match any public security. Capture the
+  // parent name up to the first comma (so trailing ", Inc." / ", Rahway" /
+  // ", NJ USA" location fragments are excluded).
+  const parentClause = String(name).match(
+    /(?:a\s+)?(?:wholly[- ]owned\s+)?(?:subsidiary|division|affiliate|unit|business)\s+of\s+([^,]+)/i
+  );
+  if (parentClause && parentClause[1]) {
+    const parentName = parentClause[1].trim();
+    if (parentName.length >= 2) {
+      const parentResolution = await resolvePublicSecurity({ companyName: parentName });
+      if (parentResolution.securityId) {
+        return { ...parentResolution, tier: parentResolution.tier === 'verified' ? 'verified' : 'strong', matchedBy: `parent_${parentResolution.matchedBy}` };
+      }
+    }
+  }
+
   // 3. Exact displayName / legalName — strong.
   const exact = await prisma.security.findFirst({
     where: {
